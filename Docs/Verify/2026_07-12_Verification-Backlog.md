@@ -44,6 +44,15 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 4. **Exe icon + README**: Explorer shows the shield on MicGuard.exe; https://github.com/Bristopher/MicGuard renders the centered header + screenshot well.
 5. **Friend-PC dependency** (new with WebView2): on a friend's machine — especially older Win10 — the settings window needs the WebView2 runtime. If one friend sees a tray icon but no window, that's the cause; the fallback is Microsoft's Evergreen WebView2 installer (worth adding a README line if it ever actually happens).
 
+## 4. v1.3.1 — center-on-open, typed volume %, GitHub link (~1 min)
+
+**Shipped:** `v1.3.1` release commits on 2026-07-12 — settings window re-centers on the primary screen every open (was remembering drag position), the volume % is now a click-to-type number (digits only, clamped 0–100, Enter/blur commits, slider live-syncs), "GitHub ↗" footer link opens the repo in your browser.
+**Machine-verified:** re-center after a simulated drag (exact-pixel match), typed 42 → slider 42, typed 999 → clamped 100, link present, screenshot.
+
+1. Drag the window somewhere, close, left-click the tray → it should reappear dead-center of your main monitor (multi-monitor: confirm it picks the monitor you expect).
+2. Click the volume number, type a value, hit Enter → slider jumps, Save holds that %.
+3. Click "GitHub ↗" → your browser opens the repo.
+
 ---
 
 ## Sweep log (commit ranges reviewed for unverified work)

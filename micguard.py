@@ -320,9 +320,15 @@ select:hover{background:#18181b}
 select:focus{border-color:#3f3f46}
 .select-wrap::after{content:"\\2304";position:absolute;right:13px;top:4px;
        color:#71717a;pointer-events:none;font-size:14px}
-.vol-row{display:flex;justify-content:space-between;align-items:baseline;margin-top:22px}
+.vol-row{display:flex;justify-content:space-between;align-items:center;margin-top:22px}
 .vol-row label{margin:0}
-#volv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.volwrap{display:flex;align-items:center;gap:2px}
+#volv{width:44px;background:transparent;border:1px solid transparent;border-radius:6px;
+      color:#fafafa;font:600 14px 'Segoe UI';text-align:right;outline:none;
+      padding:2px 4px;font-variant-numeric:tabular-nums;cursor:text}
+#volv:hover{border-color:#27272a}
+#volv:focus{border-color:#3f3f46;background:#18181b}
+.volwrap .pct{font-size:14px;font-weight:600;color:#fafafa}
 input[type=range]{-webkit-appearance:none;width:100%;height:6px;border-radius:999px;
        background:#27272a;outline:none;margin:16px 0 4px;cursor:pointer}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
@@ -339,6 +345,9 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
        background:#fafafa;top:3px;left:3px;transition:transform .15s}
 .switch input:checked + .knob{background:#22c55e}
 .switch input:checked + .knob::before{transform:translateX(16px)}
+.gh{margin-right:auto;align-self:center;color:#71717a;font-size:12.5px;
+    text-decoration:none;cursor:pointer}
+.gh:hover{color:#fafafa;text-decoration:underline}
 </style></head><body>
 <div class="header pywebview-drag-region">
   <h1>MicGuard</h1><span class="ver" id="ver"></span>
@@ -347,7 +356,8 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 <p class="sub">Keeps your mic and its volume exactly where you set them</p>
 <label for="mic">Microphone to guard</label>
 <div class="select-wrap"><select id="mic"></select></div>
-<div class="vol-row"><label>Volume to hold</label><span id="volv"></span></div>
+<div class="vol-row"><label>Volume to hold</label>
+  <span class="volwrap"><input id="volv" inputmode="numeric" maxlength="3"><span class="pct">%</span></span></div>
 <input type="range" id="vol" min="0" max="100" value="85">
 <hr>
 <div class="switchrow">
@@ -366,16 +376,28 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
   <label class="switch"><input type="checkbox" id="sw_updates"><span class="knob"></span></label>
 </div>
 <div class="btns">
+  <a class="gh" href="javascript:void(0)" onclick="pywebview.api.open_github()">GitHub &#x2197;</a>
   <button class="btn secondary" onclick="pywebview.api.cancel()">Cancel</button>
   <button class="btn primary" onclick="save()">Save</button>
 </div>
 <script>
 const vol = document.getElementById('vol'), volv = document.getElementById('volv');
 function paint(){
-  volv.textContent = vol.value + '%';
+  if (document.activeElement !== volv) volv.value = vol.value;
   vol.style.background = `linear-gradient(to right,#22c55e ${vol.value}%,#27272a ${vol.value}%)`;
 }
 vol.addEventListener('input', paint);
+// the number is editable: digits only, clamped 0-100, live-syncs the slider
+volv.addEventListener('input', () => {
+  volv.value = volv.value.replace(/[^0-9]/g, '');
+  if (volv.value !== '') {
+    vol.value = Math.min(100, +volv.value);
+    vol.style.background = `linear-gradient(to right,#22c55e ${vol.value}%,#27272a ${vol.value}%)`;
+  }
+});
+volv.addEventListener('blur', () => { volv.value = vol.value; });
+volv.addEventListener('keydown', e => { if (e.key === 'Enter') volv.blur(); });
+volv.addEventListener('focus', () => volv.select());
 async function refresh(){
   const s = await pywebview.api.get_state();
   document.getElementById('ver').textContent = 'v' + s.version;
@@ -780,6 +802,9 @@ class App:
                     app.icon.update_menu()
                 self_api.cancel()
 
+            def open_github(self_api):
+                webbrowser.open(f"https://github.com/{GITHUB_REPO}")
+
             def cancel(self_api):
                 win = app._settings_win
                 if win:
@@ -795,12 +820,24 @@ class App:
         # Alt+F4 etc. can still destroy it; recreate lazily on next open
         self._settings_win.events.closed += lambda: setattr(self, "_settings_win", None)
 
+    def _center_settings(self):
+        """Always open in the middle of the primary screen — the persistent
+        window otherwise remembers wherever it was last dragged."""
+        import webview
+        try:
+            screen = webview.screens[0]
+            self._settings_win.move((screen.width - 442) // 2,
+                                    (screen.height - 568) // 2)
+        except Exception:
+            pass
+
     def open_settings(self):
         if self._settings_win is None:
             self._make_settings_window(hidden=False)
             return
         try:
             self._settings_win.evaluate_js("typeof refresh === 'function' && refresh()")
+            self._center_settings()
             self._settings_win.show()
         except Exception:
             self._settings_win = None
