@@ -1,0 +1,16 @@
+[project]
+name = "micguard"
+version = "1.0.0"
+description = "Keeps your default Windows microphone and its volume exactly where you set them"
+requires-python = ">=3.11"
+dependencies = [
+    "pycaw>=20240210",
+    "comtypes>=1.4",
+    "pystray>=0.19",
+    "pillow>=10",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.10",
+]
