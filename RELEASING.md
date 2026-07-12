@@ -19,7 +19,8 @@ That's it. The script:
 2. Reads `VERSION` from `micguard.py`, bumps the requested part, and writes
    the new number back to both `micguard.py` and `pyproject.toml` — you never
    edit a version number by hand.
-3. Rebuilds `dist\MicGuard.exe` (PyInstaller onefile, no console).
+3. Rebuilds `dist\MicGuard.exe` (PyInstaller onefile, no console, shield icon,
+   `--collect-all customtkinter` for the UI theme assets).
 4. Commits `Release vX.Y.Z`, tags `vX.Y.Z`, pushes with `--follow-tags`.
 5. Publishes a GitHub release with the exe attached
    (`gh release create vX.Y.Z dist\MicGuard.exe`).

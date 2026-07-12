@@ -33,6 +33,18 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 3. **The failure fallback** (judgment): to simulate, block github.com or kill the network mid-download after accepting — the dialog must give you the releases URL and open the page, not strand you. Does the wording read right?
 4. **Product decision left open:** the startup check currently pops a dialog on PC start when an update exists. If that ever feels naggy mid-game-launch, alternatives are a passive tray toast or a menu badge — your call, flag it when you feel it.
 
+## 3. v1.2.0 — CustomTkinter UI redesign, shield icon, left-click-to-settings (~5 min)
+
+**Shipped:** `v1.2.0` release commits on 2026-07-12 — settings window + all dialogs rebuilt in CustomTkinter (Apple-dark cards, green accent, pill switches), new shield-with-mic icon (tray, window, exe file, README), left-click on tray icon opens Settings, GitHub-facing README with screenshot, Build-and-Release + Release-Notes docs.
+**Machine-verified:** window opens and self-screenshots correctly (assets/settings.png IS the verification artifact), syntax/import clean, frozen exe smoke pending below items.
+
+1. **Look & feel verdict** — you rejected two designs already; open Settings (left-click the tray icon — new behavior) and judge: shadcn/Apple enough? Check hover states on buttons/switches/slider and the combobox dropdown styling (its list popup is the least-themeable part of CTk — flag if it clashes).
+2. **Light mode** (judgment): the palette has light-mode values but was only screenshotted in dark. If your Windows theme is ever light, open Settings and check nothing is unreadable.
+3. **Shield icon** at real tray size (16px): does the mic inside the shield still read, or does it mush? If mush → simplify the mic glyph for small sizes.
+4. **Dialogs match**: tray → Check for updates (up-to-date toast), and tray → Uninstall (new "Uninstall / Keep it" dialog — press **Keep it**!) — both should look like the settings window family.
+5. **Exe file icon**: dist\MicGuard.exe shows the shield in Explorer (new `--icon` flag).
+6. **README on GitHub**: check https://github.com/Bristopher/MicGuard renders the centered header + screenshot correctly on desktop and phone.
+
 ---
 
 ## Sweep log (commit ranges reviewed for unverified work)

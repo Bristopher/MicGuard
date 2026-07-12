@@ -30,6 +30,19 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 WATCHDOG_SECONDS = 15  # safety net; real work is event-driven
 VOLUME_EPSILON = 0.005
 
+# UI palette — Apple-dark inspired; ACCENT matches the tray icon green.
+# (light, dark) tuples are CustomTkinter appearance-mode pairs.
+ACCENT = "#2ecc71"
+ACCENT_HOVER = "#27ae60"
+UI_BG = ("#f5f5f7", "#1c1c1e")
+UI_CARD = ("#ffffff", "#2c2c2e")
+UI_MUTED = ("#6d6d72", "#98989d")
+UI_FIELD = ("#e9e9eb", "#3a3a3c")
+UI_BTN_QUIET = ("#e5e5ea", "#3a3a3c")
+UI_BTN_QUIET_HOVER = ("#d1d1d6", "#48484a")
+UI_TEXT = ("#1c1c1e", "#f2f2f7")
+UI_FONT = "Segoe UI"
+
 IS_FROZEN = getattr(sys, "frozen", False)
 
 DEFAULT_CONFIG = {
@@ -407,15 +420,22 @@ class App:
     # ---- tray ----
 
     def _make_icon_image(self):
+        """Green shield with a white mic inside — supersampled so the tray-size
+        render stays crisp."""
         from PIL import Image, ImageDraw
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        s = 4
+        img = Image.new("RGBA", (64 * s, 64 * s), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         green = (46, 204, 113, 255)
-        d.rounded_rectangle([24, 8, 40, 36], radius=8, fill=green)   # capsule
-        d.arc([16, 20, 48, 48], start=0, end=180, fill=green, width=4)  # cradle
-        d.line([32, 48, 32, 56], fill=green, width=4)                # stem
-        d.line([22, 56, 42, 56], fill=green, width=4)                # base
-        return img
+        white = (245, 245, 247, 255)
+        shield = [(10, 12), (32, 4), (54, 12), (54, 32), (51, 42),
+                  (44, 51), (32, 60), (20, 51), (13, 42), (10, 32)]
+        d.polygon([(x * s, y * s) for x, y in shield], fill=green)
+        d.rounded_rectangle([26 * s, 15 * s, 38 * s, 33 * s], radius=6 * s, fill=white)  # capsule
+        d.arc([21 * s, 23 * s, 43 * s, 41 * s], start=0, end=180, fill=white, width=3 * s)  # cradle
+        d.line([32 * s, 41 * s, 32 * s, 46 * s], fill=white, width=3 * s)  # stem
+        d.line([26 * s, 47 * s, 38 * s, 47 * s], fill=white, width=3 * s)  # base
+        return img.resize((64, 64), Image.LANCZOS)
 
     def _status_text(self, _item=None):
         name = self.cfg.get("device_name") or "no mic selected"
@@ -435,8 +455,9 @@ class App:
                 self._toggle_enforce,
                 checked=lambda item: self.cfg["enforce"],
             ),
+            # default=True → left-clicking the tray icon opens Settings
             pystray.MenuItem("Settings...", lambda: threading.Thread(
-                target=self.open_settings, daemon=True).start()),
+                target=self.open_settings, daemon=True).start(), default=True),
             pystray.MenuItem("Re-apply now", lambda: self.enforcer.poke()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Check for updates", lambda: threading.Thread(
@@ -521,39 +542,101 @@ class App:
             )
             webbrowser.open(RELEASES_URL)
 
-    def _dialog(self, kind: str, message: str):
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
+    def _dialog(self, kind: str, message: str, yes: str = "Yes", no: str = "No"):
+        import customtkinter as ctk
+        ctk.set_appearance_mode("system")
+        root = ctk.CTk(fg_color=UI_BG)
+        root.title(APP_NAME)
+        self._polish_window(root)
         root.attributes("-topmost", True)
-        try:
-            if kind == "askyesno":
-                return messagebox.askyesno(APP_NAME, message, parent=root)
-            messagebox.showinfo(APP_NAME, message, parent=root)
-        finally:
+        root.resizable(False, False)
+        result = {"yes": False}
+
+        body = ctk.CTkFrame(root, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=26, pady=(20, 20))
+        ctk.CTkLabel(body, text=APP_NAME, font=ctk.CTkFont(UI_FONT, 17, "bold"),
+                     anchor="w").pack(fill="x")
+        ctk.CTkLabel(body, text=message, wraplength=380, justify="left",
+                     font=ctk.CTkFont(UI_FONT, 13), text_color=UI_TEXT,
+                     anchor="w").pack(fill="x", pady=(8, 18))
+
+        def close(val):
+            result["yes"] = val
             root.destroy()
+
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x")
+        if kind == "askyesno":
+            ctk.CTkButton(btns, text=yes, width=120, height=34, corner_radius=8,
+                          fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                          font=ctk.CTkFont(UI_FONT, 13, "bold"),
+                          command=lambda: close(True)).pack(side="right")
+            ctk.CTkButton(btns, text=no, width=90, height=34, corner_radius=8,
+                          fg_color=UI_BTN_QUIET, hover_color=UI_BTN_QUIET_HOVER,
+                          text_color=UI_TEXT, font=ctk.CTkFont(UI_FONT, 13),
+                          command=lambda: close(False)).pack(side="right", padx=(0, 10))
+        else:
+            ctk.CTkButton(btns, text="OK", width=110, height=34, corner_radius=8,
+                          fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                          font=ctk.CTkFont(UI_FONT, 13, "bold"),
+                          command=lambda: close(True)).pack(side="right")
+        root.eval("tk::PlaceWindow . center")
+        root.mainloop()
+        return result["yes"]
 
     # ---- uninstall ----
 
     def _uninstall(self):
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        ok = messagebox.askyesno(
-            APP_NAME,
+        ok = self._dialog(
+            "askyesno",
             "Remove MicGuard?\n\nThis deletes its settings, removes it from "
             "startup, and deletes the program itself.",
-            parent=root,
+            yes="Uninstall", no="Keep it",
         )
-        root.destroy()
         if ok:
             uninstall_self()
             self._quit()
 
     # ---- settings window ----
+
+    def _polish_window(self, root):
+        """Dark title bar + shield window icon. Every window goes through here.
+        (CTk stamps its own default icon ~200ms after creation, hence the delay.)"""
+        try:
+            from PIL import ImageTk
+            self._window_icon = ImageTk.PhotoImage(self._make_icon_image())
+            root.after(250, lambda: root.iconphoto(True, self._window_icon))
+            # iconbitmap beats iconphoto in the title bar, and CTk stamps its
+            # own at ~200ms — so stamp ours later, from a real .ico on disk
+            ico = os.path.join(CONFIG_DIR, "micguard.ico")
+            if not os.path.exists(ico):
+                self._make_icon_image().save(ico, sizes=[(16, 16), (32, 32), (48, 48)])
+            root.after(350, lambda: root.iconbitmap(ico))
+        except Exception:
+            pass
+        try:
+            import darkdetect
+            dark = bool(darkdetect.isDark())
+        except Exception:
+            dark = True
+        if dark:
+            # Deferred into the mainloop, and repainted via an alpha nudge.
+            # NEVER withdraw()/deiconify() here — unmapping a CTk window from a
+            # background thread races its setup and leaves it invisible forever
+            # (the mainloop runs, the window never shows; bisected 2026-07-12).
+            def _darken_titlebar():
+                try:
+                    DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+                    hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                        ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int),
+                    )
+                    root.attributes("-alpha", 0.99)
+                    root.after(10, lambda: root.attributes("-alpha", 1.0))
+                except Exception:
+                    pass
+            root.after(120, _darken_titlebar)
 
     def open_settings(self):
         if not self._settings_open.acquire(blocking=False):
@@ -570,48 +653,80 @@ class App:
 
     def _settings_window(self):
         import tkinter as tk
-        from tkinter import ttk
+        import customtkinter as ctk
+        ctk.set_appearance_mode("system")
 
         devices = list_capture_devices()
         names = [n for _, n in devices]
 
-        root = tk.Tk()
+        root = ctk.CTk(fg_color=UI_BG)
         root.title(f"{APP_NAME} Settings")
+        self._polish_window(root)
         root.attributes("-topmost", True)
         root.resizable(False, False)
-        frame = ttk.Frame(root, padding=16)
-        frame.grid(sticky="nsew")
 
-        ttk.Label(frame, text="Microphone to enforce:").grid(row=0, column=0, sticky="w")
-        mic_var = tk.StringVar(value=self.cfg.get("device_name") or (names[0] if names else ""))
-        mic_box = ttk.Combobox(frame, textvariable=mic_var, values=names,
-                               state="readonly", width=44)
-        mic_box.grid(row=1, column=0, columnspan=2, sticky="we", pady=(2, 10))
+        body = ctk.CTkFrame(root, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=26, pady=(18, 22))
 
-        ttk.Label(frame, text="Volume to hold it at:").grid(row=2, column=0, sticky="w")
+        header = ctk.CTkFrame(body, fg_color="transparent")
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text=APP_NAME,
+                     font=ctk.CTkFont(UI_FONT, 24, "bold")).pack(side="left")
+        ctk.CTkLabel(header, text=f"v{VERSION}", text_color=UI_MUTED,
+                     font=ctk.CTkFont(UI_FONT, 12)).pack(side="right", pady=(10, 0))
+        ctk.CTkLabel(body, text="Keeps your mic and its volume exactly where you set them",
+                     text_color=UI_MUTED, font=ctk.CTkFont(UI_FONT, 13),
+                     anchor="w").pack(fill="x", pady=(0, 14))
+
+        card = ctk.CTkFrame(body, corner_radius=14, fg_color=UI_CARD)
+        card.pack(fill="x")
+        ctk.CTkLabel(card, text="MICROPHONE TO GUARD", text_color=UI_MUTED,
+                     font=ctk.CTkFont(UI_FONT, 10, "bold"),
+                     anchor="w").pack(fill="x", padx=18, pady=(14, 2))
+        mic_box = ctk.CTkComboBox(card, values=names, height=36, corner_radius=8,
+                                  width=360, state="readonly", border_width=0,
+                                  fg_color=UI_FIELD, button_color=ACCENT,
+                                  button_hover_color=ACCENT_HOVER,
+                                  font=ctk.CTkFont(UI_FONT, 13),
+                                  dropdown_font=ctk.CTkFont(UI_FONT, 12))
+        mic_box.pack(fill="x", padx=18, pady=(0, 10))
+        mic_box.set(self.cfg.get("device_name") or (names[0] if names else ""))
+
+        vol_row = ctk.CTkFrame(card, fg_color="transparent")
+        vol_row.pack(fill="x", padx=18, pady=(6, 0))
+        ctk.CTkLabel(vol_row, text="VOLUME TO HOLD", text_color=UI_MUTED,
+                     font=ctk.CTkFont(UI_FONT, 10, "bold")).pack(side="left")
         vol_var = tk.IntVar(value=int(self.cfg["volume"]))
-        vol_label = ttk.Label(frame, text=f"{vol_var.get()}%")
-        vol_label.grid(row=2, column=1, sticky="e")
-        vol_scale = ttk.Scale(
-            frame, from_=0, to=100, orient="horizontal",
-            command=lambda v: (vol_var.set(round(float(v))),
-                               vol_label.config(text=f"{round(float(v))}%")),
-        )
-        vol_scale.set(vol_var.get())
-        vol_scale.grid(row=3, column=0, columnspan=2, sticky="we", pady=(2, 10))
+        vol_label = ctk.CTkLabel(vol_row, text=f"{vol_var.get()}%", text_color=ACCENT,
+                                 font=ctk.CTkFont(UI_FONT, 20, "bold"))
+        vol_label.pack(side="right")
+        slider = ctk.CTkSlider(card, from_=0, to=100, number_of_steps=100, height=18,
+                               progress_color=ACCENT, button_color="#ffffff",
+                               button_hover_color="#e5e5ea",
+                               command=lambda v: (vol_var.set(round(v)),
+                                                  vol_label.configure(text=f"{round(v)}%")))
+        slider.set(vol_var.get())
+        slider.pack(fill="x", padx=18, pady=(2, 18))
 
-        startup_var = tk.BooleanVar(value=self.cfg["run_at_startup"])
-        ttk.Checkbutton(frame, text="Start with Windows",
-                        variable=startup_var).grid(row=4, column=0, columnspan=2, sticky="w")
-        enforce_var = tk.BooleanVar(value=self.cfg["enforce"])
-        ttk.Checkbutton(frame, text="Enforce mic + volume (main switch)",
-                        variable=enforce_var).grid(row=5, column=0, columnspan=2, sticky="w")
-        updates_var = tk.BooleanVar(value=self.cfg["check_updates"])
-        ttk.Checkbutton(frame, text="Check for updates on launch",
-                        variable=updates_var).grid(row=6, column=0, columnspan=2, sticky="w")
+        card2 = ctk.CTkFrame(body, corner_radius=14, fg_color=UI_CARD)
+        card2.pack(fill="x", pady=(12, 0))
+
+        def switch_row(text, value, first=False, last=False):
+            row = ctk.CTkFrame(card2, fg_color="transparent")
+            row.pack(fill="x", padx=18, pady=(14 if first else 6, 14 if last else 6))
+            ctk.CTkLabel(row, text=text,
+                         font=ctk.CTkFont(UI_FONT, 13)).pack(side="left")
+            var = tk.BooleanVar(value=value)
+            ctk.CTkSwitch(row, text="", variable=var, width=48,
+                          progress_color=ACCENT).pack(side="right")
+            return var
+
+        enforce_var = switch_row("Enforce mic + volume", self.cfg["enforce"], first=True)
+        startup_var = switch_row("Start with Windows", self.cfg["run_at_startup"])
+        updates_var = switch_row("Check for updates on launch", self.cfg["check_updates"], last=True)
 
         def save():
-            chosen = mic_var.get()
+            chosen = mic_box.get()
             for dev_id, dev_name in devices:
                 if dev_name == chosen:
                     self.cfg["device_id"] = dev_id
@@ -632,14 +747,19 @@ class App:
                 self.icon.update_menu()
             root.destroy()
 
-        btns = ttk.Frame(frame)
-        btns.grid(row=7, column=0, columnspan=2, pady=(14, 0), sticky="e")
-        ttk.Button(btns, text="Save", command=save).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(btns, text="Cancel", command=root.destroy).grid(row=0, column=1)
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x", pady=(18, 0))
+        ctk.CTkButton(btns, text="Save", width=130, height=36, corner_radius=8,
+                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                      font=ctk.CTkFont(UI_FONT, 13, "bold"),
+                      command=save).pack(side="right")
+        ctk.CTkButton(btns, text="Cancel", width=100, height=36, corner_radius=8,
+                      fg_color=UI_BTN_QUIET, hover_color=UI_BTN_QUIET_HOVER,
+                      text_color=UI_TEXT, font=ctk.CTkFont(UI_FONT, 13),
+                      command=root.destroy).pack(side="right", padx=(0, 10))
 
         root.eval("tk::PlaceWindow . center")
         root.mainloop()
-
 
 def main():
     os.makedirs(CONFIG_DIR, exist_ok=True)

@@ -21,8 +21,8 @@ a JSON config, a log file, and one `HKCU\...\Run` registry value.
 | Language | Python 3.13 (`requires-python >=3.11`) | What the repo grew up in; `dict \| dict` merge and `str \| None` syntax are used, hence the 3.11 floor |
 | Audio API | **pycaw** + **comtypes** | The only maintained Python bindings to Windows Core Audio (`IMMDeviceEnumerator`, `IAudioEndpointVolume`, event callbacks). Replaced the old `nircmd.exe` shell-outs — direct COM calls are ~instant and give us *callbacks* instead of polling |
 | Set-default-device | `IPolicyConfig` COM interface, hand-declared in `micguard.py` | Windows has **no public API** to set the default audio device. This undocumented-but-stable-since-Win7 interface is what SoundSwitch/EarTrumpet use. Only `SetDefaultEndpoint` is called; earlier vtable slots are placeholder `COMMETHOD`s (slot *count* must stay exact — see Gotchas) |
-| Tray icon | **pystray** (+ **Pillow** to draw the mic glyph) | De-facto standard, ctypes-based on Windows (no pywin32 dependency), runs its own message loop |
-| Settings/dialog UI | **tkinter** (stdlib) | Ships inside the PyInstaller exe for free; a settings window and yes/no dialogs don't justify a UI framework |
+| Tray icon | **pystray** (+ **Pillow** to draw the shield-mic glyph) | De-facto standard, ctypes-based on Windows (no pywin32 dependency), runs its own message loop. Left-click opens Settings (`default=True` menu item) |
+| Settings/dialog UI | **CustomTkinter** (over tkinter) | The one sanctioned exception to stdlib-first: plain ttk looked bad (user-rejected 2026-07-12) and CTk delivers the Apple-dark card/switch/accent look for a few MB. All windows share the `UI_*`/`ACCENT` palette constants and go through `_polish_window` (dark title bar + icon). Frozen builds REQUIRE `--collect-all customtkinter` |
 | Config | JSON at `%APPDATA%\MicGuard\config.json` (stdlib `json`) | Human-readable, trivially merged with defaults on load |
 | Startup | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via stdlib `winreg` | Per-user, no admin, no Task Scheduler — an explicit product requirement |
 | Updates | GitHub Releases API via stdlib `urllib` | No `requests` dependency for one GET; latest-release tag compared to `VERSION` |
@@ -133,7 +133,13 @@ user can download manually. Version comparison is `parse_version` on
   child). Not a bug; `Stop-Process -Name MicGuard` kills both.
 - **tkinter runs fine off the main thread** (pystray owns main) as long as a
   given `Tk()` instance is created, used, and destroyed on ONE thread. Each
-  dialog/window builds a fresh `Tk()`.
+  dialog/window builds a fresh `Tk()`/`CTk()`.
+- **Never `withdraw()`/`deiconify()` a CTk window from a background thread
+  before its mainloop runs** — it races CustomTkinter's internal setup and the
+  window stays invisible forever while its mainloop happily runs (bisected
+  2026-07-12; the settings window shipped hidden this way). The dark-titlebar
+  repaint in `_polish_window` therefore uses a deferred `root.after` + alpha
+  nudge, never an unmap.
 - **`DEFAULT_CONFIG | json.load(f)`** in `load_config` is the config migration
   mechanism: new keys added to `DEFAULT_CONFIG` just work for old installs.
 - The exe is **unsigned** → SmartScreen warning on friends' PCs (documented in

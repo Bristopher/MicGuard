@@ -13,7 +13,9 @@ about doesn't exist.
 | [System-Conventions](System-Conventions.md) | Cross-cutting systems registry — Enforcer wake-queue, config merge, single-source version, user-consent convention |
 | [Dynamic-Settings](Dynamic-Settings.md) | The config.json / `DEFAULT_CONFIG` merge mechanism — read before adding ANY setting |
 | [Verification-Backlog](Verify/2026_07-12_Verification-Backlog.md) | LIVING human-verify backlog — shipped-but-never-eyeballed work, commit-sweep watermark, changelog |
-| [RELEASING](../RELEASING.md) | (repo root) How to ship a version — `release.ps1` one-command bump→build→tag→publish |
+| [RELEASING](../RELEASING.md) | (repo root) Quick-reference: `release.ps1` one-command bump→build→tag→publish |
+| [Development/Build-and-Release](Development/Build-and-Release.md) | Full build & update walkthrough — PyInstaller flags that matter, release flow, botched-release recovery, dev-machine install |
+| [Development/Release-Notes](Development/Release-Notes.md) | Release-notes templates (update + initial release) and the AI prompt that drafts them from `git log` |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes

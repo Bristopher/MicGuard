@@ -34,7 +34,8 @@ Write-Host "Releasing v$new" -ForegroundColor Green
 (Get-Content pyproject.toml -Raw) -replace '^version = "\d+\.\d+\.\d+"', "version = `"$new`"" |
     Set-Content pyproject.toml -NoNewline
 
-uv run pyinstaller --onefile --noconsole --name MicGuard micguard.py
+uv run pyinstaller --onefile --noconsole --name MicGuard `
+    --icon assets\icon.ico --collect-all customtkinter micguard.py
 if (-not (Test-Path dist\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard.exe' }
 
 git add micguard.py pyproject.toml

@@ -39,8 +39,12 @@ with urllib.request.urlopen(req, timeout=10) as resp:
 import requests  # +MB in the exe for zero benefit here
 ```
 
-Existing precedent: dialogs/settings use **tkinter** (free inside the exe),
-registry via **winreg**, mutex via **ctypes** — all stdlib.
+Existing precedent: registry via **winreg**, mutex via **ctypes**, GitHub API
+via **urllib** — all stdlib. The one sanctioned exception: **CustomTkinter**
+for ALL windows/dialogs (plain ttk was user-rejected as ugly, 2026-07-12).
+Follow the window-styling system in System-Conventions — palette constants +
+`_polish_window` + `_dialog`; never plain tkinter windows, never a second UI
+library. Frozen builds need `--collect-all customtkinter` (release.ps1 has it).
 
 ### 2. COM threading — the rule that actually bites
 

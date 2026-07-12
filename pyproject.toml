@@ -8,9 +8,11 @@ dependencies = [
     "comtypes>=1.4",
     "pystray>=0.19",
     "pillow>=10",
+    "customtkinter>=6.0.0",
 ]
 
 [dependency-groups]
 dev = [
+    "pygetwindow>=0.0.9",
     "pyinstaller>=6.10",
 ]
