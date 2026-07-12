@@ -39,8 +39,10 @@ if (-not (Test-Path dist\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard
 
 git add micguard.py pyproject.toml
 git commit -m "Release v$new"
-git tag "v$new"
-git push --follow-tags
+# annotated tag + explicit tag push: --follow-tags skips lightweight tags,
+# and gh release create refuses a tag that isn't on the remote
+git tag -a "v$new" -m "v$new"
+git push origin main "v$new"
 
 if (-not $Notes) { $Notes = "MicGuard v$new" }
 gh release create "v$new" dist\MicGuard.exe --title "MicGuard v$new" --notes $Notes
