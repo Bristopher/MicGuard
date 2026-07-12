@@ -35,7 +35,7 @@ Write-Host "Releasing v$new" -ForegroundColor Green
     Set-Content pyproject.toml -NoNewline
 
 uv run pyinstaller --onefile --noconsole --name MicGuard `
-    --icon assets\icon.ico --collect-all customtkinter micguard.py
+    --icon assets\icon.ico --collect-all webview micguard.py
 if (-not (Test-Path dist\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard.exe' }
 
 git add micguard.py pyproject.toml

@@ -26,7 +26,8 @@ back **the instant** anything touches them — measured restore time ~50 ms.
 
 > [!NOTE]
 > Windows SmartScreen may warn because the exe is unsigned — click
-> **More info → Run anyway**.
+> **More info → Run anyway**. Needs the WebView2 runtime for the settings
+> window (already on every Windows 11 PC and any PC with Edge).
 
 ## What it does
 
@@ -76,7 +77,9 @@ One Python file. `pycaw`/`comtypes` register Core Audio callbacks
 changes); any event wakes a single enforcement thread that re-asserts the
 configured device (via the same `IPolicyConfig` COM interface
 SoundSwitch/EarTrumpet use) and volume. A slow 15-second watchdog backstops
-missed events — that's the only "polling", and it's one COM call. UI is
-CustomTkinter; the whole thing compiles to a single exe with PyInstaller.
+missed events — that's the only "polling", and it's one COM call. The UI is
+real HTML/CSS rendered by Windows' built-in WebView2 (frameless pywebview
+windows — pixel-level styling without shipping Electron); the whole thing
+compiles to a single exe with PyInstaller.
 
 Architecture deep-dive: [Docs/Architecture.md](Docs/Architecture.md)

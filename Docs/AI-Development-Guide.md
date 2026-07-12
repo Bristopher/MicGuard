@@ -40,11 +40,15 @@ import requests  # +MB in the exe for zero benefit here
 ```
 
 Existing precedent: registry via **winreg**, mutex via **ctypes**, GitHub API
-via **urllib** — all stdlib. The one sanctioned exception: **CustomTkinter**
-for ALL windows/dialogs (plain ttk was user-rejected as ugly, 2026-07-12).
-Follow the window-styling system in System-Conventions — palette constants +
-`_polish_window` + `_dialog`; never plain tkinter windows, never a second UI
-library. Frozen builds need `--collect-all customtkinter` (release.ps1 has it).
+via **urllib** — all stdlib. The one sanctioned exception: **pywebview** for
+ALL windows/dialogs. The user explicitly hates tkinter-family UIs (rejected
+ttk AND CustomTkinter designs, 2026-07-12) and wants web-CSS aesthetics — UI
+is frameless WebView2 windows styled by the shadcn/zinc CSS in
+`SETTINGS_HTML`/`DIALOG_HTML`. Never tkinter windows, never a second UI
+library, never Electron (~200 MB for what WebView2 does in ~2 MB). Frozen
+builds need `--collect-all webview` (release.ps1 has it). Every
+`create_window` call passes `background_color="#09090b"` (white-flash guard);
+the settings window is persistent (hide/show, never destroy — instant opens).
 
 ### 2. COM threading — the rule that actually bites
 

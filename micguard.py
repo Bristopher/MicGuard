@@ -30,18 +30,9 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 WATCHDOG_SECONDS = 15  # safety net; real work is event-driven
 VOLUME_EPSILON = 0.005
 
-# UI palette — Apple-dark inspired; ACCENT matches the tray icon green.
-# (light, dark) tuples are CustomTkinter appearance-mode pairs.
-ACCENT = "#2ecc71"
-ACCENT_HOVER = "#27ae60"
-UI_BG = ("#f5f5f7", "#1c1c1e")
-UI_CARD = ("#ffffff", "#2c2c2e")
-UI_MUTED = ("#6d6d72", "#98989d")
-UI_FIELD = ("#e9e9eb", "#3a3a3c")
-UI_BTN_QUIET = ("#e5e5ea", "#3a3a3c")
-UI_BTN_QUIET_HOVER = ("#d1d1d6", "#48484a")
-UI_TEXT = ("#1c1c1e", "#f2f2f7")
-UI_FONT = "Segoe UI"
+# UI: all windows are frameless pywebview (WebView2) windows styled by the
+# shadcn/zinc CSS tokens inside SETTINGS_HTML / DIALOG_HTML below. Green
+# (#22c55e) appears ONLY where it means "on/active" — never as decoration.
 
 IS_FROZEN = getattr(sys, "frozen", False)
 
@@ -291,6 +282,139 @@ def already_running() -> bool:
 
 
 # --------------------------------------------------------------------------
+# UI templates — shadcn/zinc design, rendered by WebView2 via pywebview
+# --------------------------------------------------------------------------
+
+BASE_CSS = """
+*{box-sizing:border-box;margin:0;padding:0}
+:root{color-scheme:dark}
+html,body{height:100%}
+body{background:#09090b;color:#fafafa;border:1px solid #27272a;
+     font:14px/1.5 'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;
+     padding:22px 26px;user-select:none;overflow:hidden}
+.header{display:flex;align-items:baseline;gap:10px}
+h1{font-size:19px;font-weight:700;letter-spacing:-.02em}
+.ver{color:#71717a;font-size:12px}
+.close{margin-left:auto;width:28px;height:28px;border:none;background:transparent;
+       color:#71717a;font-size:14px;border-radius:6px;cursor:pointer;line-height:1}
+.close:hover{background:#27272a;color:#fafafa}
+.btns{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+button.btn{height:36px;padding:0 16px;border-radius:8px;border:1px solid transparent;
+       font:600 13px 'Segoe UI';cursor:pointer}
+.primary{background:#fafafa;color:#18181b}
+.primary:hover{background:#e4e4e7}
+.secondary{background:transparent;color:#fafafa;border-color:#27272a}
+.secondary:hover{background:#18181b}
+"""
+
+SETTINGS_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+""" + BASE_CSS + """
+.sub{color:#a1a1aa;font-size:13px;margin:2px 0 22px}
+label{display:block;font-size:13px;font-weight:600;margin-bottom:8px}
+.select-wrap{position:relative}
+select{appearance:none;width:100%;height:38px;background:#09090b;border:1px solid #27272a;
+       border-radius:8px;color:#fafafa;padding:0 32px 0 12px;font:13px 'Segoe UI';
+       outline:none;cursor:pointer}
+select:hover{background:#18181b}
+select:focus{border-color:#3f3f46}
+.select-wrap::after{content:"\\2304";position:absolute;right:13px;top:4px;
+       color:#71717a;pointer-events:none;font-size:14px}
+.vol-row{display:flex;justify-content:space-between;align-items:baseline;margin-top:22px}
+.vol-row label{margin:0}
+#volv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+input[type=range]{-webkit-appearance:none;width:100%;height:6px;border-radius:999px;
+       background:#27272a;outline:none;margin:16px 0 4px;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
+       border-radius:50%;background:#fafafa;box-shadow:0 1px 3px rgba(0,0,0,.5);cursor:pointer}
+hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
+.switchrow{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:9px 0}
+.switchrow .lab{font-size:13.5px;font-weight:500}
+.switchrow .hint{font-size:12px;color:#71717a;margin-top:1px}
+.switch{position:relative;width:38px;height:22px;flex:none}
+.switch input{position:absolute;opacity:0}
+.knob{position:absolute;inset:0;background:#27272a;border-radius:999px;
+       transition:background .15s;cursor:pointer}
+.knob::before{content:"";position:absolute;width:16px;height:16px;border-radius:50%;
+       background:#fafafa;top:3px;left:3px;transition:transform .15s}
+.switch input:checked + .knob{background:#22c55e}
+.switch input:checked + .knob::before{transform:translateX(16px)}
+</style></head><body>
+<div class="header pywebview-drag-region">
+  <h1>MicGuard</h1><span class="ver" id="ver"></span>
+  <button class="close" onclick="pywebview.api.cancel()">&#x2715;</button>
+</div>
+<p class="sub">Keeps your mic and its volume exactly where you set them</p>
+<label for="mic">Microphone to guard</label>
+<div class="select-wrap"><select id="mic"></select></div>
+<div class="vol-row"><label>Volume to hold</label><span id="volv"></span></div>
+<input type="range" id="vol" min="0" max="100" value="85">
+<hr>
+<div class="switchrow">
+  <div><div class="lab">Enforce mic + volume</div>
+       <div class="hint">The main switch &mdash; snap settings back the moment anything changes them</div></div>
+  <label class="switch"><input type="checkbox" id="sw_enforce"><span class="knob"></span></label>
+</div>
+<div class="switchrow">
+  <div><div class="lab">Start with Windows</div>
+       <div class="hint">Per-user startup entry &mdash; no admin, no Task Scheduler</div></div>
+  <label class="switch"><input type="checkbox" id="sw_startup"><span class="knob"></span></label>
+</div>
+<div class="switchrow">
+  <div><div class="lab">Check for updates on launch</div>
+       <div class="hint">Always asks before installing anything</div></div>
+  <label class="switch"><input type="checkbox" id="sw_updates"><span class="knob"></span></label>
+</div>
+<div class="btns">
+  <button class="btn secondary" onclick="pywebview.api.cancel()">Cancel</button>
+  <button class="btn primary" onclick="save()">Save</button>
+</div>
+<script>
+const vol = document.getElementById('vol'), volv = document.getElementById('volv');
+function paint(){
+  volv.textContent = vol.value + '%';
+  vol.style.background = `linear-gradient(to right,#22c55e ${vol.value}%,#27272a ${vol.value}%)`;
+}
+vol.addEventListener('input', paint);
+async function refresh(){
+  const s = await pywebview.api.get_state();
+  document.getElementById('ver').textContent = 'v' + s.version;
+  const mic = document.getElementById('mic');
+  mic.innerHTML = s.devices.map(d =>
+    `<option${d === s.deviceName ? ' selected' : ''}>${d.replace(/</g,'&lt;')}</option>`).join('');
+  vol.value = s.volume;
+  document.getElementById('sw_enforce').checked = s.enforce;
+  document.getElementById('sw_startup').checked = s.runAtStartup;
+  document.getElementById('sw_updates').checked = s.checkUpdates;
+  paint();
+}
+window.addEventListener('pywebviewready', refresh);
+function save(){
+  pywebview.api.save({
+    deviceName: document.getElementById('mic').value,
+    volume: +vol.value,
+    enforce: document.getElementById('sw_enforce').checked,
+    runAtStartup: document.getElementById('sw_startup').checked,
+    checkUpdates: document.getElementById('sw_updates').checked,
+  });
+}
+</script></body></html>"""
+
+DIALOG_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+""" + BASE_CSS + """
+.msg{color:#d4d4d8;font-size:13.5px;white-space:pre-wrap;margin:8px 0 4px;user-select:text}
+</style></head><body>
+<div class="header pywebview-drag-region">
+  <h1>MicGuard</h1>
+  <button class="close" onclick="pywebview.api.answer(false)">&#x2715;</button>
+</div>
+<div class="msg">__MESSAGE__</div>
+<div class="btns">__BUTTONS__</div>
+</body></html>"""
+
+
+# --------------------------------------------------------------------------
 # Enforcement engine
 # --------------------------------------------------------------------------
 
@@ -415,7 +539,7 @@ class App:
             save_config(self.cfg)
         self.enforcer = Enforcer(self)
         self.icon = None
-        self._settings_open = threading.Lock()
+        self._settings_win = None
 
     # ---- tray ----
 
@@ -443,10 +567,9 @@ class App:
 
     def run(self):
         import pystray
+        import webview
         self.enforcer.start()
         threading.Thread(target=self._startup_update_check, daemon=True).start()
-        if self.first_run:
-            threading.Thread(target=self.open_settings, daemon=True).start()
         menu = pystray.Menu(
             pystray.MenuItem(self._status_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -456,8 +579,7 @@ class App:
                 checked=lambda item: self.cfg["enforce"],
             ),
             # default=True → left-clicking the tray icon opens Settings
-            pystray.MenuItem("Settings...", lambda: threading.Thread(
-                target=self.open_settings, daemon=True).start(), default=True),
+            pystray.MenuItem("Settings...", lambda: self.open_settings(), default=True),
             pystray.MenuItem("Re-apply now", lambda: self.enforcer.poke()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Check for updates", lambda: threading.Thread(
@@ -470,7 +592,21 @@ class App:
         self.icon = pystray.Icon(
             APP_NAME, self._make_icon_image(), f"{APP_NAME} v{VERSION}", menu
         )
-        self.icon.run()
+        self.icon.run_detached()
+        # pywebview owns the main thread: a hidden master window keeps its GUI
+        # loop alive so settings/dialog windows can be created later from ANY
+        # thread. Destroying every window (incl. the master) exits the app.
+        webview.create_window(APP_NAME, html="<html></html>", hidden=True,
+                              background_color="#09090b")
+        # settings window is pre-created hidden so opening it later is instant
+        self._make_settings_window(hidden=not self.first_run)
+        webview.start()
+        # every window destroyed -> we are quitting
+        try:
+            self.icon.stop()
+        except Exception:
+            pass
+        self.enforcer.stop()
 
     def _toggle_enforce(self, icon, item):
         self.cfg["enforce"] = not self.cfg["enforce"]
@@ -486,9 +622,14 @@ class App:
             pass
 
     def _quit(self, icon=None, item=None):
-        self.enforcer.stop()
-        if self.icon:
-            self.icon.stop()
+        # destroying every webview window makes webview.start() return in
+        # run(), which stops the tray icon and the enforcer
+        import webview
+        for w in list(webview.windows):
+            try:
+                w.destroy()
+            except Exception:
+                pass
 
     # ---- updates ----
 
@@ -543,223 +684,128 @@ class App:
             webbrowser.open(RELEASES_URL)
 
     def _dialog(self, kind: str, message: str, yes: str = "Yes", no: str = "No"):
-        import customtkinter as ctk
-        ctk.set_appearance_mode("system")
-        root = ctk.CTk(fg_color=UI_BG)
-        root.title(APP_NAME)
-        self._polish_window(root)
-        root.attributes("-topmost", True)
-        root.resizable(False, False)
+        """Frameless webview dialog; blocks the calling thread until answered.
+        Never call from the main thread (it runs webview's loop)."""
+        import webview
+        from html import escape
         result = {"yes": False}
+        done = threading.Event()
 
-        body = ctk.CTkFrame(root, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=26, pady=(20, 20))
-        ctk.CTkLabel(body, text=APP_NAME, font=ctk.CTkFont(UI_FONT, 17, "bold"),
-                     anchor="w").pack(fill="x")
-        ctk.CTkLabel(body, text=message, wraplength=380, justify="left",
-                     font=ctk.CTkFont(UI_FONT, 13), text_color=UI_TEXT,
-                     anchor="w").pack(fill="x", pady=(8, 18))
-
-        def close(val):
-            result["yes"] = val
-            root.destroy()
-
-        btns = ctk.CTkFrame(body, fg_color="transparent")
-        btns.pack(fill="x")
         if kind == "askyesno":
-            ctk.CTkButton(btns, text=yes, width=120, height=34, corner_radius=8,
-                          fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                          font=ctk.CTkFont(UI_FONT, 13, "bold"),
-                          command=lambda: close(True)).pack(side="right")
-            ctk.CTkButton(btns, text=no, width=90, height=34, corner_radius=8,
-                          fg_color=UI_BTN_QUIET, hover_color=UI_BTN_QUIET_HOVER,
-                          text_color=UI_TEXT, font=ctk.CTkFont(UI_FONT, 13),
-                          command=lambda: close(False)).pack(side="right", padx=(0, 10))
+            buttons = (
+                f"<button class='btn secondary' onclick='pywebview.api.answer(false)'>{escape(no)}</button>"
+                f"<button class='btn primary' onclick='pywebview.api.answer(true)'>{escape(yes)}</button>"
+            )
         else:
-            ctk.CTkButton(btns, text="OK", width=110, height=34, corner_radius=8,
-                          fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                          font=ctk.CTkFont(UI_FONT, 13, "bold"),
-                          command=lambda: close(True)).pack(side="right")
-        root.eval("tk::PlaceWindow . center")
-        root.mainloop()
-        return result["yes"]
+            buttons = "<button class='btn primary' onclick='pywebview.api.answer(true)'>OK</button>"
+        html = (DIALOG_HTML
+                .replace("__MESSAGE__", escape(message))
+                .replace("__BUTTONS__", buttons))
 
-    # ---- uninstall ----
-
-    def _uninstall(self):
-        ok = self._dialog(
-            "askyesno",
-            "Remove MicGuard?\n\nThis deletes its settings, removes it from "
-            "startup, and deletes the program itself.",
-            yes="Uninstall", no="Keep it",
-        )
-        if ok:
-            uninstall_self()
-            self._quit()
-
-    # ---- settings window ----
-
-    def _polish_window(self, root):
-        """Dark title bar + shield window icon. Every window goes through here.
-        (CTk stamps its own default icon ~200ms after creation, hence the delay.)"""
-        try:
-            from PIL import ImageTk
-            self._window_icon = ImageTk.PhotoImage(self._make_icon_image())
-            root.after(250, lambda: root.iconphoto(True, self._window_icon))
-            # iconbitmap beats iconphoto in the title bar, and CTk stamps its
-            # own at ~200ms — so stamp ours later, from a real .ico on disk
-            ico = os.path.join(CONFIG_DIR, "micguard.ico")
-            if not os.path.exists(ico):
-                self._make_icon_image().save(ico, sizes=[(16, 16), (32, 32), (48, 48)])
-            root.after(350, lambda: root.iconbitmap(ico))
-        except Exception:
-            pass
-        try:
-            import darkdetect
-            dark = bool(darkdetect.isDark())
-        except Exception:
-            dark = True
-        if dark:
-            # Deferred into the mainloop, and repainted via an alpha nudge.
-            # NEVER withdraw()/deiconify() here — unmapping a CTk window from a
-            # background thread races its setup and leaves it invisible forever
-            # (the mainloop runs, the window never shows; bisected 2026-07-12).
-            def _darken_titlebar():
+        class Api:
+            def answer(self_api, value):
+                result["yes"] = bool(value)
+                done.set()
                 try:
-                    DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-                    hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-                        ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int),
-                    )
-                    root.attributes("-alpha", 0.99)
-                    root.after(10, lambda: root.attributes("-alpha", 1.0))
+                    win.destroy()
                 except Exception:
                     pass
-            root.after(120, _darken_titlebar)
+
+        lines = sum(max(1, (len(line) // 52) + 1) for line in message.split("\n"))
+        win = webview.create_window(
+            APP_NAME, html=html, js_api=Api(), width=430,
+            height=min(560, 158 + 21 * lines), frameless=True,
+            on_top=True, resizable=False, background_color="#09090b")
+        win.events.closed += done.set
+        done.wait()
+        return result["yes"]
+
+    # ---- settings window ----
+    # Created ONCE (hidden) at startup and shown/hidden after that: opening is
+    # instant because WebView2 init + device enumeration already happened, and
+    # background_color prevents any white flash on first paint.
+
+    def _make_settings_window(self, hidden: bool):
+        import webview
+        app = self
+
+        class Api:
+            def get_state(self_api):
+                try:
+                    import comtypes
+                    comtypes.CoInitialize()  # js_api calls arrive on webview worker threads
+                except Exception:
+                    pass
+                try:
+                    devices = [n for _, n in list_capture_devices()]
+                except Exception as e:
+                    log.warning("device enumeration for settings failed: %s", e)
+                    devices = []
+                return {
+                    "devices": devices,
+                    "deviceName": app.cfg.get("device_name") or "",
+                    "volume": int(app.cfg["volume"]),
+                    "enforce": bool(app.cfg["enforce"]),
+                    "runAtStartup": bool(app.cfg["run_at_startup"]),
+                    "checkUpdates": bool(app.cfg["check_updates"]),
+                    "version": VERSION,
+                }
+
+            def save(self_api, state):
+                try:
+                    import comtypes
+                    comtypes.CoInitialize()
+                except Exception:
+                    pass
+                try:
+                    for dev_id, dev_name in list_capture_devices():
+                        if dev_name == state.get("deviceName"):
+                            app.cfg["device_id"] = dev_id
+                            app.cfg["device_name"] = dev_name
+                            break
+                except Exception as e:
+                    log.warning("device lookup on save failed: %s", e)
+                app.cfg["volume"] = int(state.get("volume", app.cfg["volume"]))
+                app.cfg["enforce"] = bool(state.get("enforce"))
+                app.cfg["run_at_startup"] = bool(state.get("runAtStartup"))
+                app.cfg["check_updates"] = bool(state.get("checkUpdates"))
+                save_config(app.cfg)
+                try:
+                    set_run_at_startup(app.cfg["run_at_startup"])
+                except OSError as e:
+                    log.warning("startup registry update failed: %s", e)
+                app.enforcer.reattach()
+                app.enforcer.poke()
+                if app.icon:
+                    app.icon.update_menu()
+                self_api.cancel()
+
+            def cancel(self_api):
+                win = app._settings_win
+                if win:
+                    try:
+                        win.hide()  # hide, never destroy — next open is instant
+                    except Exception:
+                        pass
+
+        self._settings_win = webview.create_window(
+            f"{APP_NAME} Settings", html=SETTINGS_HTML, js_api=Api(),
+            width=442, height=568, frameless=True, on_top=True,
+            resizable=False, hidden=hidden, background_color="#09090b")
+        # Alt+F4 etc. can still destroy it; recreate lazily on next open
+        self._settings_win.events.closed += lambda: setattr(self, "_settings_win", None)
 
     def open_settings(self):
-        if not self._settings_open.acquire(blocking=False):
+        if self._settings_win is None:
+            self._make_settings_window(hidden=False)
             return
-        import comtypes
-        comtypes.CoInitialize()
         try:
-            self._settings_window()
-        except Exception as e:
-            log.error("settings window failed: %s", e)
-        finally:
-            comtypes.CoUninitialize()
-            self._settings_open.release()
+            self._settings_win.evaluate_js("typeof refresh === 'function' && refresh()")
+            self._settings_win.show()
+        except Exception:
+            self._settings_win = None
+            self._make_settings_window(hidden=False)
 
-    def _settings_window(self):
-        import tkinter as tk
-        import customtkinter as ctk
-        ctk.set_appearance_mode("system")
-
-        devices = list_capture_devices()
-        names = [n for _, n in devices]
-
-        root = ctk.CTk(fg_color=UI_BG)
-        root.title(f"{APP_NAME} Settings")
-        self._polish_window(root)
-        root.attributes("-topmost", True)
-        root.resizable(False, False)
-
-        body = ctk.CTkFrame(root, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=26, pady=(18, 22))
-
-        header = ctk.CTkFrame(body, fg_color="transparent")
-        header.pack(fill="x")
-        ctk.CTkLabel(header, text=APP_NAME,
-                     font=ctk.CTkFont(UI_FONT, 24, "bold")).pack(side="left")
-        ctk.CTkLabel(header, text=f"v{VERSION}", text_color=UI_MUTED,
-                     font=ctk.CTkFont(UI_FONT, 12)).pack(side="right", pady=(10, 0))
-        ctk.CTkLabel(body, text="Keeps your mic and its volume exactly where you set them",
-                     text_color=UI_MUTED, font=ctk.CTkFont(UI_FONT, 13),
-                     anchor="w").pack(fill="x", pady=(0, 14))
-
-        card = ctk.CTkFrame(body, corner_radius=14, fg_color=UI_CARD)
-        card.pack(fill="x")
-        ctk.CTkLabel(card, text="MICROPHONE TO GUARD", text_color=UI_MUTED,
-                     font=ctk.CTkFont(UI_FONT, 10, "bold"),
-                     anchor="w").pack(fill="x", padx=18, pady=(14, 2))
-        mic_box = ctk.CTkComboBox(card, values=names, height=36, corner_radius=8,
-                                  width=360, state="readonly", border_width=0,
-                                  fg_color=UI_FIELD, button_color=ACCENT,
-                                  button_hover_color=ACCENT_HOVER,
-                                  font=ctk.CTkFont(UI_FONT, 13),
-                                  dropdown_font=ctk.CTkFont(UI_FONT, 12))
-        mic_box.pack(fill="x", padx=18, pady=(0, 10))
-        mic_box.set(self.cfg.get("device_name") or (names[0] if names else ""))
-
-        vol_row = ctk.CTkFrame(card, fg_color="transparent")
-        vol_row.pack(fill="x", padx=18, pady=(6, 0))
-        ctk.CTkLabel(vol_row, text="VOLUME TO HOLD", text_color=UI_MUTED,
-                     font=ctk.CTkFont(UI_FONT, 10, "bold")).pack(side="left")
-        vol_var = tk.IntVar(value=int(self.cfg["volume"]))
-        vol_label = ctk.CTkLabel(vol_row, text=f"{vol_var.get()}%", text_color=ACCENT,
-                                 font=ctk.CTkFont(UI_FONT, 20, "bold"))
-        vol_label.pack(side="right")
-        slider = ctk.CTkSlider(card, from_=0, to=100, number_of_steps=100, height=18,
-                               progress_color=ACCENT, button_color="#ffffff",
-                               button_hover_color="#e5e5ea",
-                               command=lambda v: (vol_var.set(round(v)),
-                                                  vol_label.configure(text=f"{round(v)}%")))
-        slider.set(vol_var.get())
-        slider.pack(fill="x", padx=18, pady=(2, 18))
-
-        card2 = ctk.CTkFrame(body, corner_radius=14, fg_color=UI_CARD)
-        card2.pack(fill="x", pady=(12, 0))
-
-        def switch_row(text, value, first=False, last=False):
-            row = ctk.CTkFrame(card2, fg_color="transparent")
-            row.pack(fill="x", padx=18, pady=(14 if first else 6, 14 if last else 6))
-            ctk.CTkLabel(row, text=text,
-                         font=ctk.CTkFont(UI_FONT, 13)).pack(side="left")
-            var = tk.BooleanVar(value=value)
-            ctk.CTkSwitch(row, text="", variable=var, width=48,
-                          progress_color=ACCENT).pack(side="right")
-            return var
-
-        enforce_var = switch_row("Enforce mic + volume", self.cfg["enforce"], first=True)
-        startup_var = switch_row("Start with Windows", self.cfg["run_at_startup"])
-        updates_var = switch_row("Check for updates on launch", self.cfg["check_updates"], last=True)
-
-        def save():
-            chosen = mic_box.get()
-            for dev_id, dev_name in devices:
-                if dev_name == chosen:
-                    self.cfg["device_id"] = dev_id
-                    self.cfg["device_name"] = dev_name
-                    break
-            self.cfg["volume"] = int(vol_var.get())
-            self.cfg["enforce"] = bool(enforce_var.get())
-            self.cfg["run_at_startup"] = bool(startup_var.get())
-            self.cfg["check_updates"] = bool(updates_var.get())
-            save_config(self.cfg)
-            try:
-                set_run_at_startup(self.cfg["run_at_startup"])
-            except OSError as e:
-                log.warning("startup registry update failed: %s", e)
-            self.enforcer.reattach()
-            self.enforcer.poke()
-            if self.icon:
-                self.icon.update_menu()
-            root.destroy()
-
-        btns = ctk.CTkFrame(body, fg_color="transparent")
-        btns.pack(fill="x", pady=(18, 0))
-        ctk.CTkButton(btns, text="Save", width=130, height=36, corner_radius=8,
-                      fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      font=ctk.CTkFont(UI_FONT, 13, "bold"),
-                      command=save).pack(side="right")
-        ctk.CTkButton(btns, text="Cancel", width=100, height=36, corner_radius=8,
-                      fg_color=UI_BTN_QUIET, hover_color=UI_BTN_QUIET_HOVER,
-                      text_color=UI_TEXT, font=ctk.CTkFont(UI_FONT, 13),
-                      command=root.destroy).pack(side="right", padx=(0, 10))
-
-        root.eval("tk::PlaceWindow . center")
-        root.mainloop()
 
 def main():
     os.makedirs(CONFIG_DIR, exist_ok=True)

@@ -21,8 +21,8 @@ a JSON config, a log file, and one `HKCU\...\Run` registry value.
 | Language | Python 3.13 (`requires-python >=3.11`) | What the repo grew up in; `dict \| dict` merge and `str \| None` syntax are used, hence the 3.11 floor |
 | Audio API | **pycaw** + **comtypes** | The only maintained Python bindings to Windows Core Audio (`IMMDeviceEnumerator`, `IAudioEndpointVolume`, event callbacks). Replaced the old `nircmd.exe` shell-outs — direct COM calls are ~instant and give us *callbacks* instead of polling |
 | Set-default-device | `IPolicyConfig` COM interface, hand-declared in `micguard.py` | Windows has **no public API** to set the default audio device. This undocumented-but-stable-since-Win7 interface is what SoundSwitch/EarTrumpet use. Only `SetDefaultEndpoint` is called; earlier vtable slots are placeholder `COMMETHOD`s (slot *count* must stay exact — see Gotchas) |
-| Tray icon | **pystray** (+ **Pillow** to draw the shield-mic glyph) | De-facto standard, ctypes-based on Windows (no pywin32 dependency), runs its own message loop. Left-click opens Settings (`default=True` menu item) |
-| Settings/dialog UI | **CustomTkinter** (over tkinter) | The one sanctioned exception to stdlib-first: plain ttk looked bad (user-rejected 2026-07-12) and CTk delivers the Apple-dark card/switch/accent look for a few MB. All windows share the `UI_*`/`ACCENT` palette constants and go through `_polish_window` (dark title bar + icon). Frozen builds REQUIRE `--collect-all customtkinter` |
+| Tray icon | **pystray** (+ **Pillow** to draw the shield-mic glyph) | De-facto standard, ctypes-based on Windows (no pywin32 dependency). Runs detached; left-click opens Settings (`default=True` menu item) |
+| Settings/dialog UI | **pywebview** (WebView2) — real HTML/CSS | The user rejected two native-toolkit designs (ttk, then CustomTkinter) — tkinter-family UIs were ruled out outright. pywebview renders frameless windows with actual shadcn/zinc CSS in Windows' built-in WebView2 for a few MB (vs ~200 MB for Electron), no Node/React build step. Templates live IN `micguard.py` (`SETTINGS_HTML`/`DIALOG_HTML`); JS↔Python via `js_api`. Frozen builds REQUIRE `--collect-all webview`; friends' PCs need the WebView2 runtime (ships with Win11/Edge) |
 | Config | JSON at `%APPDATA%\MicGuard\config.json` (stdlib `json`) | Human-readable, trivially merged with defaults on load |
 | Startup | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via stdlib `winreg` | Per-user, no admin, no Task Scheduler — an explicit product requirement |
 | Updates | GitHub Releases API via stdlib `urllib` | No `requests` dependency for one GET; latest-release tag compared to `VERSION` |
@@ -72,9 +72,15 @@ main()                                   [main thread]
  ├─ App() — first run: autodetect_device() picks the mic that is BOTH
  │          default + default-comms (fallback: multimedia default → first
  │          active capture device), volume prefilled from current level
- └─ app.run() → pystray Icon.run()  ← owns the main thread forever
+ └─ app.run() → pystray runs DETACHED; webview.start() owns the main thread:
+     ├─ hidden master window keeps webview's loop alive for the app's lifetime
+     ├─ settings window pre-created HIDDEN (background_color=#09090b) —
+     │   open = evaluate_js("refresh()") + show() → ~30 ms, no white flash;
+     │   Cancel/Save/✕ hide() it, never destroy
+     ├─ dialogs = short-lived frameless windows, created from any thread
+     └─ quit = destroy every window → start() returns → icon+enforcer stopped
 
-Enforcer (threading.Thread, daemon)      [the ONLY thread doing COM work]
+Enforcer (threading.Thread, daemon)      [owns all LONG-LIVED COM objects]
  ├─ comtypes.CoInitialize()
  ├─ registers _DeviceCallback  (IMMNotificationClient: default-device /
  │                              device-state changes)
@@ -89,10 +95,11 @@ Enforcer (threading.Thread, daemon)      [the ONLY thread doing COM work]
 Callbacks (arrive on arbitrary COM threads)
  └─ do NOTHING but wake.put("volume"|"default"|"state")   ← hard rule
 
-UI threads (spawned per action from tray menu)
- ├─ settings window: new thread → CoInitialize → tkinter mainloop
- │   (lock `_settings_open` makes it single-instance)
- └─ update check / uninstall: new thread → tkinter dialogs
+UI (webview)
+ ├─ js_api calls (get_state/save) arrive on webview WORKER threads →
+ │   they CoInitialize defensively before touching Core Audio
+ └─ update check / uninstall run in their own threads and block on
+     App._dialog (threading.Event answered by the dialog's js_api)
 ```
 
 **The enforcement loop in words:** anything that touches the mic fires a COM
@@ -131,15 +138,19 @@ user can download manually. Version comparison is `parse_version` on
   re-entering the audio API there can deadlock. Queue-poke only.
 - **PyInstaller onefile shows two `MicGuard.exe` processes** (bootstrap +
   child). Not a bug; `Stop-Process -Name MicGuard` kills both.
-- **tkinter runs fine off the main thread** (pystray owns main) as long as a
-  given `Tk()` instance is created, used, and destroyed on ONE thread. Each
-  dialog/window builds a fresh `Tk()`/`CTk()`.
-- **Never `withdraw()`/`deiconify()` a CTk window from a background thread
-  before its mainloop runs** — it races CustomTkinter's internal setup and the
-  window stays invisible forever while its mainloop happily runs (bisected
-  2026-07-12; the settings window shipped hidden this way). The dark-titlebar
-  repaint in `_polish_window` therefore uses a deferred `root.after` + alpha
-  nudge, never an unmap.
+- **tkinter-family UIs are banned here by history, not taste alone**: ttk and
+  CustomTkinter designs were both user-rejected, and CTk had a real
+  thread-race bug (unmapping a window from a background thread before its
+  mainloop → permanently invisible window, shipped in v1.2.0's first-run).
+  pywebview replaced all of it — don't reintroduce tkinter windows.
+- **webview.start() returning IS the quit path** — the app exits when every
+  webview window (including the hidden master) is destroyed. Never destroy
+  the master or the persistent settings window casually: settings windows
+  `hide()`, only `_quit` destroys.
+- **js_api handlers run on webview worker threads** — CoInitialize
+  defensively (try/except) before any Core Audio call there.
+- **`background_color="#09090b"` on every create_window** — without it
+  WebView2 flashes white before first paint (user-reported).
 - **`DEFAULT_CONFIG | json.load(f)`** in `load_config` is the config migration
   mechanism: new keys added to `DEFAULT_CONFIG` just work for old installs.
 - The exe is **unsigned** → SmartScreen warning on friends' PCs (documented in

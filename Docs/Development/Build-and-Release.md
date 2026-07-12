@@ -18,16 +18,17 @@ uv run pythonw micguard.py     # run from source (tray icon appears)
 
 # build the distributable exe:
 uv run pyinstaller --onefile --noconsole --name MicGuard `
-    --icon assets\icon.ico --collect-all customtkinter micguard.py
-# -> dist\MicGuard.exe (~20 MB)
+    --icon assets\icon.ico --collect-all webview micguard.py
+# -> dist\MicGuard.exe (~21 MB)
 ```
 
 Flags that matter:
 - `--onefile --noconsole` — single exe, no console window (logs go to
   `%APPDATA%\MicGuard\micguard.log`).
-- `--collect-all customtkinter` — CustomTkinter ships theme JSON/asset files
-  PyInstaller doesn't detect; without this the frozen exe crashes on the first
-  window.
+- `--collect-all webview` — pywebview ships JS bridge files and
+  `WebView2Loader.dll` that PyInstaller doesn't detect; without this the
+  frozen exe has no UI. (pythonnet/clr_loader are handled automatically by
+  pyinstaller-hooks-contrib.)
 - `--icon assets\icon.ico` — the shield icon on the exe file itself.
 
 Test a build by running `dist\MicGuard.exe` and checking the log prints

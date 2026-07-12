@@ -8,7 +8,7 @@ dependencies = [
     "comtypes>=1.4",
     "pystray>=0.19",
     "pillow>=10",
-    "customtkinter>=6.0.0",
+    "pywebview>=6.2.1",
 ]
 
 [dependency-groups]

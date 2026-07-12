@@ -33,17 +33,16 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 3. **The failure fallback** (judgment): to simulate, block github.com or kill the network mid-download after accepting — the dialog must give you the releases URL and open the page, not strand you. Does the wording read right?
 4. **Product decision left open:** the startup check currently pops a dialog on PC start when an update exists. If that ever feels naggy mid-game-launch, alternatives are a passive tray toast or a menu badge — your call, flag it when you feel it.
 
-## 3. v1.2.0 — CustomTkinter UI redesign, shield icon, left-click-to-settings (~5 min)
+## 3. v1.3.0 — WebView2 (real CSS) UI, shield icon, left-click-to-settings, instant open (~5 min)
 
-**Shipped:** `v1.2.0` release commits on 2026-07-12 — settings window + all dialogs rebuilt in CustomTkinter (Apple-dark cards, green accent, pill switches), new shield-with-mic icon (tray, window, exe file, README), left-click on tray icon opens Settings, GitHub-facing README with screenshot, Build-and-Release + Release-Notes docs.
-**Machine-verified:** window opens and self-screenshots correctly (assets/settings.png IS the verification artifact), syntax/import clean, frozen exe smoke pending below items.
+**Shipped:** `v1.2.0` + `v1.3.0` release commits on 2026-07-12 — after ttk and CustomTkinter designs were both rejected, ALL windows are now frameless pywebview/WebView2 windows with shadcn/zinc CSS (tkinter fully removed). v1.2.0's CTk UI was superseded the same hour and never needs review. Also: shield-with-mic icon everywhere, left-click tray opens Settings, persistent hidden settings window (open ≈ 30 ms, no white flash via `background_color`), GitHub README + Build-and-Release + Release-Notes docs.
+**Machine-verified:** settings window + dialog render correctly from source AND from the frozen exe (screenshots; assets/settings.png is the frozen-exe capture), dialog answer round-trip returns correctly, show/hide reopen timed at 0.030 s, clean loop exit. You already said "finally looks good!" to the settings screenshot — remaining items are interaction feel, not looks.
 
-1. **Look & feel verdict** — you rejected two designs already; open Settings (left-click the tray icon — new behavior) and judge: shadcn/Apple enough? Check hover states on buttons/switches/slider and the combobox dropdown styling (its list popup is the least-themeable part of CTk — flag if it clashes).
-2. **Light mode** (judgment): the palette has light-mode values but was only screenshotted in dark. If your Windows theme is ever light, open Settings and check nothing is unreadable.
-3. **Shield icon** at real tray size (16px): does the mic inside the shield still read, or does it mush? If mush → simplify the mic glyph for small sizes.
-4. **Dialogs match**: tray → Check for updates (up-to-date toast), and tray → Uninstall (new "Uninstall / Keep it" dialog — press **Keep it**!) — both should look like the settings window family.
-5. **Exe file icon**: dist\MicGuard.exe shows the shield in Explorer (new `--icon` flag).
-6. **README on GitHub**: check https://github.com/Bristopher/MicGuard renders the centered header + screenshot correctly on desktop and phone.
+1. **Interaction feel**: left-click tray → window should appear instantly with no white flash (the thing you asked for). Drag it by its header. Hover states on buttons/switches/slider. The mic `<select>` dropdown is the one OS-native-looking part — flag if it bothers you.
+2. **Dialogs live**: tray → Check for updates (up-to-date toast today; the consent dialog appears next release), tray → Uninstall — press **Keep it**! Both should match the settings window's look.
+3. **Shield icon** at real tray size (16 px): does the mic inside still read, or mush? If mush → simplify the glyph for small sizes.
+4. **Exe icon + README**: Explorer shows the shield on MicGuard.exe; https://github.com/Bristopher/MicGuard renders the centered header + screenshot well.
+5. **Friend-PC dependency** (new with WebView2): on a friend's machine — especially older Win10 — the settings window needs the WebView2 runtime. If one friend sees a tray icon but no window, that's the cause; the fallback is Microsoft's Evergreen WebView2 installer (worth adding a README line if it ever actually happens).
 
 ---
 
