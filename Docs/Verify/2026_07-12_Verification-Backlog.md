@@ -3,7 +3,7 @@
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
 **Updated:** 2026-07-12 — seeded from the full repo history to date: §1 (v1.0.0 rewrite) + §2 (v1.1.0 consent-based update flow)
-**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `v1.1.0` release commit (2026-07-12), all commits reviewed on **2026-07-12** — the repo is one day old; everything shipped is in §1–§2 below. **Next sweep starts from the `v1.1.0` tag.**
+**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `v1.2.0` tag (2026-07-12), all commits reviewed on **2026-07-12** — the repo is one day old; everything shipped is in §1–§3 below. **Next sweep starts from the `v1.2.0` tag.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
 
