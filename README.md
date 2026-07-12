@@ -29,8 +29,10 @@ Windows SmartScreen may warn because the exe is unsigned — click
   volume / startup), re-apply now, check for updates, uninstall, quit.
 - **Start with Windows**: a per-user `HKCU\...\Run` registry entry — nothing
   else touches your system.
-- **Self-updates**: checks GitHub Releases on launch and can replace itself
-  in place. No installer to download.
+- **Update prompts, never silent**: checks GitHub Releases on launch and asks
+  before doing anything. If you say yes it replaces itself in place and
+  restarts; if that fails it opens the release page so you can download
+  `MicGuard.exe` manually.
 - **Clean uninstall**: tray → *Uninstall...* removes the startup entry, the
   config folder, and the exe itself. Zero leftovers.
 

@@ -16,11 +16,13 @@ import subprocess
 import sys
 import threading
 import urllib.request
+import webbrowser
 import winreg
 
 APP_NAME = "MicGuard"
 VERSION = "1.0.0"
 GITHUB_REPO = "Bristopher/MicGuard"
+RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 CONFIG_DIR = os.path.join(os.environ["APPDATA"], APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 LOG_PATH = os.path.join(CONFIG_DIR, "micguard.log")
@@ -478,23 +480,59 @@ class App:
         self._update_check(quiet=False)
 
     def _update_check(self, quiet: bool):
+        """Never updates on its own: finds a newer release, asks the user,
+        and if installing fails points them at the release page instead."""
         try:
             release = fetch_latest_release()
             latest = parse_version(release.get("tag_name", ""))
-            if latest and latest > parse_version(VERSION):
-                if not IS_FROZEN:
-                    self._notify(f"v{release['tag_name']} available on GitHub "
-                                 "(running from source — git pull to update)")
-                    return
-                self._notify(f"Updating to {release['tag_name']}...")
-                if apply_update(release):
-                    self._quit()
-            elif not quiet:
-                self._notify(f"Up to date (v{VERSION})")
         except Exception as e:
             log.info("update check failed: %s", e)
             if not quiet:
                 self._notify("Update check failed (offline?)")
+            return
+        if not latest or latest <= parse_version(VERSION):
+            if not quiet:
+                self._notify(f"Up to date (v{VERSION})")
+            return
+        tag = release.get("tag_name")
+        if not self._dialog(
+            "askyesno",
+            f"{APP_NAME} {tag} is available (you have v{VERSION}).\n\n"
+            "Update now? MicGuard will restart itself.",
+        ):
+            return
+        if not IS_FROZEN:
+            self._dialog("info", "Running from source — update with git pull.\n\n"
+                                 "Opening the release page.")
+            webbrowser.open(RELEASES_URL)
+            return
+        try:
+            if not apply_update(release):
+                raise RuntimeError("release has no .exe asset")
+            self._quit()
+        except Exception as e:
+            log.warning("update failed: %s", e)
+            self._dialog(
+                "info",
+                "The update could not be installed automatically.\n\n"
+                f"Download it yourself from:\n{RELEASES_URL}\n\n"
+                "Opening that page now — quit MicGuard, then replace your "
+                "MicGuard.exe with the downloaded one and run it.",
+            )
+            webbrowser.open(RELEASES_URL)
+
+    def _dialog(self, kind: str, message: str):
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            if kind == "askyesno":
+                return messagebox.askyesno(APP_NAME, message, parent=root)
+            messagebox.showinfo(APP_NAME, message, parent=root)
+        finally:
+            root.destroy()
 
     # ---- uninstall ----
 

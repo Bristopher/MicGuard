@@ -1,0 +1,16 @@
+{
+  "toolkit_version": "2.0",
+  "installed": null,
+  "templates": {
+    "CLAUDE.md": "c27b141ff9fa04e9faea3fd87c14ab834692356afae9cd46e14c9fa4520ce383",
+    "AI-Development-Guide.md": "f9e8e6573ac35a19fa67fea0181b39c43c3d0fff16db798039ccb7ccc50c63a6",
+    "Main-Doc-Index.md": "91e7566a979256044f66d5d509f1d8cca2d4229829f06c65ce838c0331c9bcfb",
+    "Architecture.md": "67435787804230b653eceb2595bd191211c0b7fb49e3af5d35acc34fe945d22a",
+    "Feature-Template.md": "96da7c0a848f5837cb519257306bd7d346dbe54115e14108a65c8928081821c4",
+    "System-Conventions.md": "9158583d34d56e894e572fa12d40dc5c6ce68fc9d1639bd393389a968afc1a17",
+    "Dynamic-Settings.md": "0ceab74148aa1713ecc907447f91fad3f8146404946633c35f802ea4191f5743",
+    "Preferred-Stack.md": "caf84cfd51e50d3a57449162753f63ebafb7f019e223e72b62defd0c3bab7d25",
+    "Verification-Backlog.md": "cdb081b77759a58314a20720028842d4a5b775307a7bf537fde48b6dba629305"
+  },
+  "updated": "2026-07-12"
+}
