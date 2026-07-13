@@ -100,7 +100,8 @@ CLSID_PolicyConfigClient = GUID("{870af99c-171d-4f9e-af0d-e63df40c2bc9}")
 
 
 def set_default_endpoint(device_id: str) -> None:
-    """Make device_id the default capture device for every role."""
+    """Make device_id the default endpoint (its flow is implied by the device)
+    for every role."""
     policy = CoCreateInstance(CLSID_PolicyConfigClient, IPolicyConfig, CLSCTX_ALL)
     for role in (ERole.eConsole.value, ERole.eMultimedia.value, ERole.eCommunications.value):
         policy.SetDefaultEndpoint(device_id, role)
@@ -318,8 +319,7 @@ class _DeviceCallback(MMNotificationClient):
         self._wake = wake
 
     def on_default_device_changed(self, flow, flow_id, role, role_id, default_device_id):
-        if flow_id == EDataFlow.eCapture.value:
-            self._wake.put("default")
+        self._wake.put("default")
 
     def on_device_state_changed(self, device_id, new_state, new_state_id):
         self._wake.put("state")
@@ -743,21 +743,28 @@ DIALOG_HTML = """<!doctype html>
 # Enforcement engine
 # --------------------------------------------------------------------------
 
+FLOWS = (("capture", EDataFlow.eCapture.value),
+         ("render", EDataFlow.eRender.value))
+
+
 class Enforcer(threading.Thread):
     """Owns all COM objects. Woken by audio events (or a slow watchdog) and
-    re-asserts the configured default device + volume."""
+    re-asserts the highest-priority connected device of each flow's list
+    (capture = mics, render = outputs) plus its volume."""
 
-    def __init__(self, app):
+    def __init__(self, app, on_fallback=None):
         super().__init__(daemon=True, name="enforcer")
         self.app = app
+        self.on_fallback = on_fallback          # called OUTSIDE COM callbacks, on this thread
         self.wake: queue.Queue = queue.Queue()
         # NOT "_stop" — see MicMonitor: shadowing Thread._stop() breaks join()
         self._stop_evt = threading.Event()
-        self._volume_com = None
-        self._volume_cb = None
-        # True while the settings preview ("hear yourself") is adjusting the
-        # volume live — device enforcement continues, volume snap-back waits
-        self.hold_volume = False
+        self.hold_volume = False                # hear-yourself preview: suspend capture volume assert
+        self.enforced = {"capture": None, "render": None}
+        self._volume_coms = {"capture": None, "render": None}
+        self._volume_cbs = {"capture": None, "render": None}
+        self._listener_ids = {"capture": None, "render": None}
+        self._set_once_done = set()             # output ids whose one-shot volume was applied
 
     def stop(self):
         self._stop_evt.set()
@@ -773,7 +780,6 @@ class Enforcer(threading.Thread):
             device_cb = _DeviceCallback(self.wake)
             enumerator = AudioUtilities.GetDeviceEnumerator()
             enumerator.RegisterEndpointNotificationCallback(device_cb)
-            self._attach_volume_listener()
             self._enforce()
             while not self._stop_evt.is_set():
                 try:
@@ -792,60 +798,87 @@ class Enforcer(threading.Thread):
         finally:
             comtypes.CoUninitialize()
 
-    def _attach_volume_listener(self):
-        device_id = self.app.cfg.get("device_id")
-        if not device_id:
+    def _attach_volume_listener(self, key, device_id):
+        if self._listener_ids[key] == device_id and self._volume_coms[key] is not None:
             return
+        old_com, old_cb = self._volume_coms[key], self._volume_cbs[key]
+        if old_com is not None and old_cb is not None:
+            try:
+                old_com.UnregisterControlChangeNotify(old_cb)
+            except Exception:
+                pass
+        self._volume_coms[key] = None
         try:
-            if self._volume_com is not None and self._volume_cb is not None:
-                try:
-                    self._volume_com.UnregisterControlChangeNotify(self._volume_cb)
-                except Exception:
-                    pass
-            self._volume_com = get_endpoint_volume(device_id)
-            self._volume_cb = _VolumeCallback(self.wake)
-            self._volume_com.RegisterControlChangeNotify(self._volume_cb)
+            com = get_endpoint_volume(device_id)
+            cb = _VolumeCallback(self.wake)
+            com.RegisterControlChangeNotify(cb)
+            self._volume_coms[key], self._volume_cbs[key] = com, cb
+            self._listener_ids[key] = device_id
         except Exception as e:
-            log.warning("could not attach volume listener: %s", e)
-            self._volume_com = None
+            log.warning("volume listener (%s) attach failed: %s", key, e)
 
     def reattach(self):
-        """Called after the configured device changes."""
+        """Called after the configured device lists change."""
         self.wake.put("reattach")
 
     def _enforce(self):
         cfg = self.app.cfg
-        if not cfg.get("enforce") or not cfg.get("device_id"):
+        if not cfg.get("enforce"):
             return
-        device_id = cfg["device_id"]
+        mics, outputs = active_profile_lists(cfg)
+        for (key, flow), entries in zip(FLOWS, (mics, outputs)):
+            try:
+                self._enforce_flow(key, flow, entries)
+            except Exception as e:
+                log.warning("enforce pass (%s) failed: %s", key, e)
+                self._volume_coms[key] = None   # watchdog retries
+
+    def _enforce_flow(self, key, flow, entries):
+        if not entries:
+            self.enforced[key] = None
+            return
+        active_ids = {i for i, _ in list_devices(flow)}
+        want = pick_device(entries, active_ids)
+        prev = self.enforced[key]
+        if want is None:
+            if prev is not None and self.on_fallback:
+                self.on_fallback(key, prev.get("name"), None)
+            self.enforced[key] = None
+            return
+        # availability-driven change (not first pass) -> alert
+        if prev is not None and prev.get("id") != want.get("id") and self.on_fallback:
+            self.on_fallback(key, prev.get("name"), want)
+        first_claim = self.enforced[key] is None or prev.get("id") != want.get("id")
+        self.enforced[key] = want
+        for role in (ERole.eMultimedia, ERole.eCommunications, ERole.eConsole):
+            if get_default_endpoint_id(flow, role) != want["id"]:
+                log.info("%s default drifted (role %s) — restoring %s",
+                         key, role.name, want.get("name"))
+                set_default_endpoint(want["id"])
+                break
+        hold = key == "capture" or want.get("hold_volume")
+        if key == "capture" and self.hold_volume:
+            return                              # hear-yourself preview owns the volume
+        self._attach_volume_listener(key, want["id"])
+        com = self._volume_coms[key]
+        if com is None:
+            return
+        target = max(0.0, min(1.0, int(want.get("volume", RECOMMENDED_VOLUME)) / 100.0))
         try:
-            for role in (ERole.eMultimedia, ERole.eCommunications, ERole.eConsole):
-                if get_default_capture_id(role) != device_id:
-                    log.info("default device drifted (role %s) — restoring", role.name)
-                    set_default_endpoint(device_id)
-                    break
-            if self._volume_com is None:
-                self._attach_volume_listener()
-            if self.hold_volume:
-                return
-            if self._volume_com is not None:
-                target = max(0.0, min(1.0, cfg["volume"] / 100.0))
-                try:
-                    current = self._volume_com.GetMasterVolumeLevelScalar()
-                except Exception:
-                    self._attach_volume_listener()
-                    if self._volume_com is None:
-                        return
-                    current = self._volume_com.GetMasterVolumeLevelScalar()
-                if abs(current - target) > VOLUME_EPSILON:
-                    log.info("volume drifted to %.0f%% — restoring %d%%",
-                             current * 100, cfg["volume"])
-                    self._volume_com.SetMasterVolumeLevelScalar(target, None)
-                if self._volume_com.GetMute():
-                    self._volume_com.SetMute(0, None)
-        except Exception as e:
-            log.warning("enforce pass failed: %s", e)
-            self._volume_com = None  # device probably vanished; watchdog retries
+            current = com.GetMasterVolumeLevelScalar()
+        except Exception:
+            self._volume_coms[key] = None
+            return
+        if hold:
+            if abs(current - target) > VOLUME_EPSILON:
+                log.info("%s volume drifted to %.0f%% — restoring %d%%",
+                         key, current * 100, int(want.get("volume", 0)))
+                com.SetMasterVolumeLevelScalar(target, None)
+            if key == "capture" and com.GetMute():
+                com.SetMute(0, None)
+        elif first_claim and want["id"] not in self._set_once_done:
+            com.SetMasterVolumeLevelScalar(target, None)   # set once at switch time
+            self._set_once_done.add(want["id"])
 
 
 # --------------------------------------------------------------------------
@@ -857,25 +890,26 @@ class App:
         self.cfg = load_config()
         self.first_run = self.cfg is None
         if self.first_run:
-            self.cfg = dict(DEFAULT_CONFIG)
+            self.cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
             device_id, device_name = autodetect_device()
-            self.cfg["device_id"] = device_id
-            self.cfg["device_name"] = device_name
             if device_id:
+                volume = RECOMMENDED_VOLUME
                 try:
                     vol = get_endpoint_volume(device_id).GetMasterVolumeLevelScalar()
-                    self.cfg["volume"] = round(vol * 100)
+                    volume = round(vol * 100)
                 except Exception:
                     pass
+                self.cfg["profiles"][0]["mics"] = [
+                    {"id": device_id, "name": device_name or "", "volume": volume}]
             save_config(self.cfg)
-        self.enforcer = Enforcer(self)
+        self.enforcer = Enforcer(self)  # Task 4 wires on_fallback
         self.icon = None
         self._settings_win = None
         self._menu_win = None
         self._menu_shown_at = 0.0
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
-        self._meter_device_id = self.cfg.get("device_id")
+        self._meter_device_id = (self._current_mic() or {}).get("id")
 
     # ---- tray ----
 
@@ -897,9 +931,21 @@ class App:
         d.line([26 * s, 47 * s, 38 * s, 47 * s], fill=white, width=3 * s)  # base
         return img.resize((64, 64), Image.LANCZOS)
 
+    def _current_mic(self):
+        """The mic entry the enforcer currently holds, falling back to the
+        active profile's first mic before the first enforce pass."""
+        entry = self.enforcer.enforced.get("capture")
+        if entry is None:
+            mics, _ = active_profile_lists(self.cfg)
+            entry = mics[0] if mics else None
+        return entry
+
     def _status_text(self, _item=None):
-        name = self.cfg.get("device_name") or "no mic selected"
-        return f"{name} @ {self.cfg['volume']}%"
+        entry = self._current_mic()
+        if not entry:
+            return "no mic selected"
+        name = entry.get("name") or "no mic selected"
+        return f"{name} @ {int(entry.get('volume', RECOMMENDED_VOLUME))}%"
 
     def run(self):
         import pystray
@@ -1088,10 +1134,14 @@ class App:
                 except Exception as e:
                     log.warning("device enumeration for settings failed: %s", e)
                     devices = []
+                # scaffolding until Task 6: settings UI edits the active
+                # profile's FIRST mic entry only
+                mics, _ = active_profile_lists(app.cfg)
+                mic0 = mics[0] if mics else {}
                 return {
                     "devices": devices,
-                    "deviceName": app.cfg.get("device_name") or "",
-                    "volume": int(app.cfg["volume"]),
+                    "deviceName": mic0.get("name") or "",
+                    "volume": int(mic0.get("volume", RECOMMENDED_VOLUME)),
                     "enforce": bool(app.cfg["enforce"]),
                     "runAtStartup": bool(app.cfg["run_at_startup"]),
                     "checkUpdates": bool(app.cfg["check_updates"]),
@@ -1157,15 +1207,27 @@ class App:
                     comtypes.CoInitialize()
                 except Exception:
                     pass
+                # scaffolding until Task 6: write into the active profile's
+                # first mic entry (created if the list is empty)
+                mics, _ = active_profile_lists(app.cfg)
+                if not mics:
+                    prof = next((p for p in app.cfg["profiles"]
+                                 if p.get("name") == app.cfg.get("active_profile")),
+                                app.cfg["profiles"][0])
+                    mics = prof.setdefault("mics", [])
+                    mics.append({"id": None, "name": "",
+                                 "volume": RECOMMENDED_VOLUME})
+                entry = mics[0]
                 try:
                     for dev_id, dev_name in list_capture_devices():
                         if dev_name == state.get("deviceName"):
-                            app.cfg["device_id"] = dev_id
-                            app.cfg["device_name"] = dev_name
+                            entry["id"] = dev_id
+                            entry["name"] = dev_name
                             break
                 except Exception as e:
                     log.warning("device lookup on save failed: %s", e)
-                app.cfg["volume"] = int(state.get("volume", app.cfg["volume"]))
+                entry["volume"] = int(state.get("volume",
+                                                entry.get("volume", RECOMMENDED_VOLUME)))
                 app.cfg["enforce"] = bool(state.get("enforce"))
                 app.cfg["run_at_startup"] = bool(state.get("runAtStartup"))
                 app.cfg["check_updates"] = bool(state.get("checkUpdates"))
@@ -1235,7 +1297,7 @@ class App:
         off a 'Listen to this device' the user enabled in Windows."""
         self._set_monitor(None, False)
         self._stop_meter()
-        self._meter_device_id = self.cfg.get("device_id")
+        self._meter_device_id = (self._current_mic() or {}).get("id")
 
     def _set_monitor(self, device_id, on) -> bool:
         if self._monitor is not None:
@@ -1251,7 +1313,7 @@ class App:
 
     def _start_meter(self):
         self._stop_meter()
-        self._meter_device_id = self.cfg.get("device_id")
+        self._meter_device_id = (self._current_mic() or {}).get("id")
         stop = threading.Event()
         self._meter_stop = stop
         win = self._settings_win
