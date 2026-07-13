@@ -16,9 +16,11 @@ about doesn't exist.
 | [RELEASING](../RELEASING.md) | (repo root) Quick-reference: `release.ps1` one-command bump→build→tag→publish |
 | [Development/Build-and-Release](Development/Build-and-Release.md) | Full build & update walkthrough — PyInstaller flags that matter, release flow, botched-release recovery, dev-machine install |
 | [Development/Release-Notes](Development/Release-Notes.md) | Release-notes templates (update + initial release) and the AI prompt that drafts them from `git log` |
+| [superpowers/specs/2026-07-13 device-priority-profiles-hotkeys](superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md) | Approved v1.5 design: capture+render priority/fallback lists w/ per-device volumes, profiles, fallback alert popup, volume hotkeys + game-safe OSD |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes
+- `superpowers/specs/` + `superpowers/plans/` — brainstormed design specs and implementation plans (durable record)
 - `Features/` — shipped features AI/devs must know
 - `Development/<group>/` — core features, grouped
 - `Future/` — deferred "later" ideas, one doc each
