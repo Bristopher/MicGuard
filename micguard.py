@@ -336,6 +336,137 @@ class MicMonitor(threading.Thread):
 
 
 # --------------------------------------------------------------------------
+# Global volume hotkeys — RegisterHotKey + a blocking GetMessage loop
+# --------------------------------------------------------------------------
+
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN = 0x1, 0x2, 0x4, 0x8
+_MODS = {"ctrl": MOD_CONTROL, "alt": MOD_ALT, "shift": MOD_SHIFT, "win": MOD_WIN}
+_VKS = {"up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+        "space": 0x20, "tab": 0x09, "plus": 0xBB, "minus": 0xBD,
+        **{f"f{i}": 0x6F + i for i in range(1, 13)}}
+
+
+def parse_hotkey(combo: str):
+    """'ctrl+shift+up' -> (mods bitmask, virtual-key code); None if invalid."""
+    parts = [p.strip().lower() for p in (combo or "").split("+") if p.strip()]
+    if not parts:
+        return None
+    mods, vk = 0, None
+    for p in parts:
+        if p in _MODS:
+            mods |= _MODS[p]
+        elif vk is None:
+            if p in _VKS:
+                vk = _VKS[p]
+            elif len(p) == 1 and (p.isalpha() or p.isdigit()):
+                vk = ord(p.upper())
+            else:
+                return None
+        else:
+            return None
+    return (mods, vk) if vk is not None else None
+
+
+def adjust_system_volume(step: int) -> tuple[str, int] | None:
+    """Default render endpoint ± step%. Returns (label, new %)."""
+    enumerator = AudioUtilities.GetDeviceEnumerator()
+    imm = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender.value,
+                                             ERole.eMultimedia.value)
+    vol = cast(imm.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None),
+               POINTER(IAudioEndpointVolume))
+    new = max(0.0, min(1.0, vol.GetMasterVolumeLevelScalar() + step / 100.0))
+    vol.SetMasterVolumeLevelScalar(new, None)
+    return "System", round(new * 100)
+
+
+def adjust_app_volume(exe: str, step: int) -> tuple[str, int] | None:
+    """Every audio session of exe (case-insensitive) ± step% — the same
+    control as that app's sndvol slider. None if the app has no session."""
+    hit = None
+    for s in AudioUtilities.GetAllSessions():
+        if s.Process and s.Process.name().lower() == exe.lower():
+            sv = s.SimpleAudioVolume
+            new = max(0.0, min(1.0, sv.GetMasterVolume() + step / 100.0))
+            sv.SetMasterVolume(new, None)
+            hit = round(new * 100)
+    return (exe, hit) if hit is not None else None
+
+
+class HotkeyManager(threading.Thread):
+    """Global volume hotkeys via RegisterHotKey + a blocking GetMessage loop —
+    zero idle cost, no keyboard hook. One instance per enable; App._restart_hotkeys
+    replaces the instance to apply rebinds."""
+
+    def __init__(self, app):
+        super().__init__(daemon=True, name="hotkeys")
+        self.app = app
+        self._tid = None
+        self._ready = threading.Event()
+
+    def start_if_enabled(self):
+        if self.app.cfg.get("hotkeys", {}).get("enabled"):
+            self.start()
+
+    def run(self):
+        import gc
+        import comtypes
+        u, k = ctypes.windll.user32, ctypes.windll.kernel32
+        comtypes.CoInitialize()
+        self._tid = k.GetCurrentThreadId()
+        actions = {}
+        try:
+            for n, b in enumerate(self.app.cfg["hotkeys"].get("bindings", []), start=1):
+                parsed = parse_hotkey(b.get("keys", ""))
+                if not parsed:
+                    log.warning("hotkey %r invalid — skipped", b.get("keys"))
+                    continue
+                # plain mods (no MOD_NOREPEAT): holding the combo keeps stepping
+                if not u.RegisterHotKey(None, n, parsed[0], parsed[1]):
+                    log.warning("hotkey %r already in use elsewhere", b["keys"])
+                    continue
+                actions[n] = b
+            self._ready.set()
+            msg = ctypes.wintypes.MSG()
+            while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message == 0x0312 and msg.wParam in actions:  # WM_HOTKEY
+                    self._fire(actions[msg.wParam])
+        except Exception as e:
+            log.warning("hotkey loop died: %s", e)
+        finally:
+            for n in actions:
+                try:
+                    u.UnregisterHotKey(None, n)
+                except Exception:
+                    pass
+            gc.collect()
+            comtypes.CoUninitialize()
+
+    def _fire(self, binding):
+        try:
+            target, step = binding.get("target", "system"), int(binding.get("step", 2))
+            if target == "system":
+                result = adjust_system_volume(step)
+            elif target.startswith("app:"):
+                result = adjust_app_volume(target[4:], step)
+            else:
+                result = None
+            if result:
+                self.app.show_osd(result[0], result[1])
+        except Exception as e:
+            log.warning("hotkey action failed: %s", e)
+
+    def shutdown(self):
+        if not self.is_alive():
+            return
+        # a freshly-started thread may not have registered yet — wait for it,
+        # or the WM_QUIT below would be posted into the void and the thread
+        # would block in GetMessage forever (bit the restart path in testing)
+        self._ready.wait(timeout=1)
+        if self._tid:
+            ctypes.windll.user32.PostThreadMessageW(self._tid, 0x0012, 0, 0)  # WM_QUIT
+
+
+# --------------------------------------------------------------------------
 # Event callbacks — do no COM work here, just poke the enforcement thread
 # --------------------------------------------------------------------------
 
@@ -1080,6 +1211,30 @@ function setAlert(kind, title, sub){
 }
 </script></body></html>"""
 
+OSD_W, OSD_H = 260, 64
+
+OSD_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090b}
+body{color:#fafafa;border:1px solid #27272a;border-radius:0;padding:12px 16px;
+     overflow:hidden;user-select:none;
+     font:600 13px 'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif}
+.row{display:flex;justify-content:space-between;margin-bottom:8px}
+.pct{font-variant-numeric:tabular-nums}
+.bar{height:6px;background:#27272a;border-radius:999px;overflow:hidden}
+#fill{height:100%;background:#22c55e;border-radius:999px;transition:width .08s}
+</style></head><body>
+<div class="row"><span id="label"></span><span class="pct" id="pct"></span></div>
+<div class="bar"><div id="fill"></div></div>
+<script>
+function setOsd(label, pct){
+  document.getElementById('label').textContent = label;
+  document.getElementById('pct').textContent = pct + '%';
+  document.getElementById('fill').style.width = pct + '%';
+}
+</script></body></html>"""
+
 
 # --------------------------------------------------------------------------
 # Enforcement engine
@@ -1254,6 +1409,10 @@ class App:
         self._alert_primed = False      # _make_alert_window resets this to False
                                          # on (re)create/close, so a stale prime
                                          # self-corrects the next time it's checked
+        self._osd_win = None
+        self._osd_timer = None
+        self._osd_primed = False        # _make_osd_window resets this too
+        self.hotkeys = None             # HotkeyManager while hotkeys are enabled
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
         self._meter_device_id = (self._current_mic() or {}).get("id")
@@ -1334,7 +1493,10 @@ class App:
             self._start_meter()
         self._make_menu_window(hidden=True)
         self._make_alert_window()
-        webview.start(func=self._prime_alert_window)
+        self._make_osd_window()
+        self.hotkeys = HotkeyManager(self)
+        self.hotkeys.start_if_enabled()
+        webview.start(func=self._prime_windows)
         # every window destroyed -> we are quitting
         try:
             self.icon.stop()
@@ -1362,6 +1524,14 @@ class App:
         if self._alert_timer:
             self._alert_timer.cancel()
             self._alert_timer = None
+        if self._osd_timer:
+            self._osd_timer.cancel()
+            self._osd_timer = None
+        try:
+            if self.hotkeys is not None:
+                self.hotkeys.shutdown()
+        except Exception:
+            pass
         for w in list(webview.windows):
             try:
                 w.destroy()
@@ -1949,25 +2119,46 @@ class App:
 
         self._alert_win.events.closed += _on_closed
 
-    def _prime_alert_window(self, *_args):
+    def _prime_window(self, win, flag_attr):
         """WebView2 never composites a frame for a window shown ONLY via the
         SW_SHOWNOACTIVATE path in _show_noactivate — it paints solid black
         until it has been through one normal (activating) show/hide cycle.
-        Run this once the webview GUI loop is live: passed as webview.start's
-        func hook so it runs off the hot path of the first real alert. Guarded
-        by _alert_primed, which _make_alert_window resets to False whenever
-        the alert window is (re)created or closed — so a stale/missing prime
-        self-corrects the next time this runs, from either call site."""
-        if self._alert_primed or self._alert_win is None:
+        Run this once the webview GUI loop is live: _prime_windows is passed
+        as webview.start's func hook so it runs off the hot path of the first
+        real popup. Guarded by the flag attribute (_alert_primed/_osd_primed),
+        which the window's _make_* resets to False whenever the window is
+        (re)created or closed — so a stale/missing prime self-corrects the
+        next time this runs, from either call site."""
+        if getattr(self, flag_attr) or win is None:
             return
         try:
-            self._alert_win.move(-32000, -32000)  # off-screen: no flash
-            self._alert_win.show()
+            # a show/hide cycle BEFORE the page has loaded doesn't count —
+            # the swapchain never presents and the window stays black even
+            # after the page loads (observed in the Task 7 harness). Wait for
+            # the page; on timeout leave the flag False so the defensive
+            # re-prime at the call sites retries later instead of never.
+            if not win.events.loaded.wait(5):
+                log.warning("window priming skipped (%s): page not loaded yet",
+                            flag_attr)
+                return
+            win.move(-32000, -32000)  # off-screen: no flash
+            win.show()
             time.sleep(0.15)
-            self._alert_win.hide()
-            self._alert_primed = True
+            win.hide()
+            setattr(self, flag_attr, True)
         except Exception as e:
-            log.warning("alert window priming failed: %s", e)
+            log.warning("window priming failed (%s): %s", flag_attr, e)
+
+    def _prime_alert_window(self, *_args):
+        self._prime_window(self._alert_win, "_alert_primed")
+
+    def _prime_osd_window(self, *_args):
+        self._prime_window(self._osd_win, "_osd_primed")
+
+    def _prime_windows(self, *_args):
+        """webview.start's single func hook: prime every no-activate window."""
+        self._prime_alert_window()
+        self._prime_osd_window()
 
     def _hide_alert(self):
         try:
@@ -2031,6 +2222,74 @@ class App:
             self._alert_timer.start()
         except Exception as e:
             log.warning("fallback alert failed: %s", e)
+
+    # ---- volume-hotkey OSD (no-focus, like the alert) ----
+
+    def _make_osd_window(self):
+        import webview
+        app = self
+
+        self._osd_win = webview.create_window(
+            f"{APP_NAME} OSD", html=OSD_HTML,
+            width=OSD_W, height=OSD_H, frameless=True, on_top=True,
+            resizable=False, hidden=True, background_color="#09090b")
+        self._osd_primed = False
+
+        def _on_closed():
+            app._osd_win = None
+            app._osd_primed = False
+
+        self._osd_win.events.closed += _on_closed
+
+    def _hide_osd(self):
+        try:
+            if self._osd_win:
+                self._osd_win.hide()
+        except Exception:
+            pass
+
+    def show_osd(self, label, percent):
+        """Volume OSD, bottom-center, no focus steal. Called from the
+        HotkeyManager thread — never raises (a broken OSD must not take the
+        hotkeys down with it)."""
+        try:
+            import webview
+            if self._osd_win is None:
+                self._make_osd_window()
+            if not self._osd_primed:
+                # Priming normally happens up front via webview.start's func
+                # hook (App.run / _prime_windows). This is the defensive
+                # fallback for e.g. a window recreated after being closed.
+                self._prime_osd_window()
+            self._osd_win.evaluate_js(
+                f"setOsd({json.dumps(str(label))}, {int(percent)})")
+            screen = webview.screens[0]
+            self._show_noactivate(self._osd_win, f"{APP_NAME} OSD",
+                                  (screen.width - OSD_W) // 2,
+                                  screen.height - OSD_H - 90)
+            if self._osd_timer:
+                self._osd_timer.cancel()
+            self._osd_timer = threading.Timer(1.2, self._hide_osd)
+            self._osd_timer.daemon = True
+            self._osd_timer.start()
+        except Exception as e:
+            log.warning("volume OSD failed: %s", e)
+
+    def _restart_hotkeys(self):
+        """Settings save calls this to apply enable/rebind changes: tear down
+        the old manager (a HotkeyManager registers once, at thread start) and
+        start a fresh one only if hotkeys are enabled. Never raises."""
+        try:
+            old, self.hotkeys = self.hotkeys, None
+            if old is not None:
+                old.shutdown()
+                if old.is_alive():
+                    old.join(timeout=1)
+            if self.cfg.get("hotkeys", {}).get("enabled"):
+                self.hotkeys = HotkeyManager(self)
+                self.hotkeys.start()
+        except Exception as e:
+            log.warning("hotkey restart failed: %s", e)
 
     def _patch_tray_clicks(self):
         """Reroute tray clicks: left → Settings, right → the themed menu.

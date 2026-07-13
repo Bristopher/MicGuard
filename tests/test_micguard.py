@@ -73,5 +73,24 @@ class TestPickDevice(unittest.TestCase):
         self.assertEqual(m.pick_device(entries, {"c"})["id"], "c")
 
 
+class TestParseHotkey(unittest.TestCase):
+    def test_ctrl_up(self):
+        self.assertEqual(m.parse_hotkey("ctrl+up"), (m.MOD_CONTROL, 0x26))
+
+    def test_ctrl_shift_down(self):
+        self.assertEqual(m.parse_hotkey("ctrl+shift+down"),
+                         (m.MOD_CONTROL | m.MOD_SHIFT, 0x28))
+
+    def test_letter_and_fkey(self):
+        self.assertEqual(m.parse_hotkey("ctrl+alt+m"),
+                         (m.MOD_CONTROL | m.MOD_ALT, ord('M')))
+        self.assertEqual(m.parse_hotkey("win+f9"), (m.MOD_WIN, 0x78))
+
+    def test_invalid(self):
+        self.assertIsNone(m.parse_hotkey("ctrl+"))
+        self.assertIsNone(m.parse_hotkey("banana+up"))
+        self.assertIsNone(m.parse_hotkey(""))
+
+
 if __name__ == "__main__":
     unittest.main()
