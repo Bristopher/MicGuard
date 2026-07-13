@@ -39,10 +39,20 @@ RECOMMENDED_VOLUME = 85  # the AT2020 sweet spot — "Use recommended" in settin
 IS_FROZEN = getattr(sys, "frozen", False)
 
 DEFAULT_CONFIG = {
-    "device_id": None,
-    "device_name": None,
-    "volume": 85,
+    # v2 schema — see Docs/superpowers/specs/2026-07-13-...-design.md
+    "profiles": [{"name": "Default", "mics": [], "outputs": []}],
+    "active_profile": "Default",
     "enforce": True,
+    "notify_fallback": True,
+    "hotkeys": {
+        "enabled": False,
+        "bindings": [
+            {"keys": "ctrl+up", "target": "system", "step": 2},
+            {"keys": "ctrl+down", "target": "system", "step": -2},
+            {"keys": "ctrl+shift+up", "target": "app:Discord.exe", "step": 2},
+            {"keys": "ctrl+shift+down", "target": "app:Discord.exe", "step": -2},
+        ],
+    },
     "run_at_startup": True,
     "check_updates": True,
 }
@@ -309,16 +319,41 @@ class _DeviceCallback(MMNotificationClient):
 def load_config() -> dict | None:
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = DEFAULT_CONFIG | json.load(f)
-        return cfg
+            raw = json.load(f)
     except (OSError, ValueError):
         return None
+    return DEFAULT_CONFIG | migrate_config(raw)
 
 
 def save_config(cfg: dict) -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
+
+
+def migrate_config(raw: dict) -> dict:
+    """v1 (single device_id/device_name/volume) -> v2 (profiles). PERMANENT —
+    the one sanctioned exception to plain dict-merge migration, so any old
+    install upgrades cleanly forever. Idempotent."""
+    if "profiles" not in raw:
+        mics = []
+        if raw.get("device_id"):
+            mics = [{"id": raw["device_id"], "name": raw.get("device_name") or "",
+                     "volume": int(raw.get("volume", RECOMMENDED_VOLUME))}]
+        raw["profiles"] = [{"name": "Default", "mics": mics, "outputs": []}]
+        raw["active_profile"] = "Default"
+    for dead in ("device_id", "device_name", "volume"):
+        raw.pop(dead, None)
+    return raw
+
+
+def active_profile_lists(cfg: dict):
+    """(mics, outputs) of the active profile; falls back to the first profile
+    if active_profile names one that no longer exists."""
+    profiles = cfg.get("profiles") or [{"name": "Default", "mics": [], "outputs": []}]
+    prof = next((p for p in profiles if p.get("name") == cfg.get("active_profile")),
+                profiles[0])
+    return prof.get("mics", []), prof.get("outputs", [])
 
 
 def launch_command() -> str:
