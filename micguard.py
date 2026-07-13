@@ -771,7 +771,8 @@ function setMeter(p){
     Math.min(100, Math.round(Math.sqrt(p) * 100)) + '%';
 }
 function useRecommended(){
-  if (S && S.mics.length){ S.mics[0].volume = recommended; renderList('mic'); }
+  const t = micTarget();
+  if (S && t >= 0){ S.mics[t].volume = recommended; renderList('mic'); }
 }
 
 // ---- device priority lists (working copy lives here; Save persists it) ----
@@ -848,7 +849,8 @@ async function syncMicTarget(){
 }
 hear.addEventListener('change', async () => {
   const t = micTarget();
-  const on = await pywebview.api.set_monitor(t >= 0 ? S.mics[t].id : null, hear.checked);
+  if (t < 0){ hear.checked = false; return; }  // no connected mic — no-op
+  const on = await pywebview.api.set_monitor(S.mics[t].id, hear.checked);
   hear.checked = on;
   if (!on) preview();  // monitor off — nothing left holding the live volume
 });
@@ -1517,8 +1519,12 @@ class App:
 
             def new_profile(self_api, name, source=None):
                 """Create a profile as a deep copy of `source` (default: the
-                active profile) and make it active. Persisted immediately —
-                profile management is structural, not Save-gated."""
+                active profile). Does NOT activate it — the copy is only
+                selected into the dropdown for editing; activation happens
+                only via Save (adjudicated rule: dropdown selection alone
+                never flips live enforcement). Persisted immediately —
+                profile management is structural, not Save-gated — but
+                `active_profile` is left untouched."""
                 name = str(name or "").strip()
                 err = _profile_name_error(app.cfg, name)
                 if err:
@@ -1531,10 +1537,9 @@ class App:
                 copy = json.loads(json.dumps(src))
                 copy["name"] = name
                 profiles.append(copy)
-                app.cfg["active_profile"] = name
                 save_config(app.cfg)
                 log.info("profile created: %s (copy of %s)", name, src.get("name"))
-                return {"ok": True, "active": name}
+                return {"ok": True, "profile": name}
 
             def rename_profile(self_api, old, new):
                 new = str(new or "").strip()
@@ -1725,6 +1730,10 @@ class App:
         self._meter_device_id = (self._current_mic() or {}).get("id")
 
     def _set_monitor(self, device_id, on) -> bool:
+        if on and not device_id:
+            # no device to monitor (e.g. empty/disconnected mic list) —
+            # treat as off rather than constructing MicMonitor(None)
+            on = False
         if self._monitor is not None:
             self._monitor.stop()
             self._monitor = None
