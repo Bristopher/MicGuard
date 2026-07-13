@@ -935,7 +935,9 @@ class App:
         self._menu_shown_at = 0.0
         self._alert_win = None
         self._alert_timer = None
-        self._alert_primed = False
+        self._alert_primed = False      # _make_alert_window resets this to False
+                                         # on (re)create/close, so a stale prime
+                                         # self-corrects the next time it's checked
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
         self._meter_device_id = (self._current_mic() or {}).get("id")
@@ -1016,7 +1018,7 @@ class App:
             self._start_meter()
         self._make_menu_window(hidden=True)
         self._make_alert_window()
-        webview.start()
+        webview.start(func=self._prime_alert_window)
         # every window destroyed -> we are quitting
         try:
             self.icon.stop()
@@ -1528,6 +1530,26 @@ class App:
 
         self._alert_win.events.closed += _on_closed
 
+    def _prime_alert_window(self, *_args):
+        """WebView2 never composites a frame for a window shown ONLY via the
+        SW_SHOWNOACTIVATE path in _show_noactivate — it paints solid black
+        until it has been through one normal (activating) show/hide cycle.
+        Run this once the webview GUI loop is live: passed as webview.start's
+        func hook so it runs off the hot path of the first real alert. Guarded
+        by _alert_primed, which _make_alert_window resets to False whenever
+        the alert window is (re)created or closed — so a stale/missing prime
+        self-corrects the next time this runs, from either call site."""
+        if self._alert_primed or self._alert_win is None:
+            return
+        try:
+            self._alert_win.move(-32000, -32000)  # off-screen: no flash
+            self._alert_win.show()
+            time.sleep(0.15)
+            self._alert_win.hide()
+            self._alert_primed = True
+        except Exception as e:
+            log.warning("alert window priming failed: %s", e)
+
     def _hide_alert(self):
         try:
             if self._alert_win:
@@ -1552,36 +1574,31 @@ class App:
     def notify_fallback(self, flow_label, lost_name, now_entry):
         """Called from the Enforcer thread when a flow's primary device is
         lost. Logs always; the popup itself is gated on cfg["notify_fallback"].
-        Never raises — enforcement must keep running regardless."""
-        kind_name = "Mic" if flow_label == "capture" else "Output"
-        if now_entry is None:
-            kind, title = "warn", f"{kind_name} disconnected"
-            sub = f"{lost_name or 'Device'} gone — nothing in your list is connected"
-        elif lost_name:
-            kind, title = "ok", f"{kind_name} switched"
-            sub = (f"{lost_name} → {now_entry['name']}"
-                   f" @ {now_entry.get('volume', '?')}%")
-        else:
-            return
-        log.info("fallback alert: %s — %s", title, sub)
-        if not self.cfg.get("notify_fallback"):
-            return
-        import webview
+        Never raises — enforcement must keep running regardless, so the whole
+        body (including message formatting, which can KeyError on a malformed
+        now_entry) runs inside the try."""
         try:
+            kind_name = "Mic" if flow_label == "capture" else "Output"
+            if now_entry is None:
+                kind, title = "warn", f"{kind_name} disconnected"
+                sub = f"{lost_name or 'Device'} gone — nothing in your list is connected"
+            elif lost_name:
+                kind, title = "ok", f"{kind_name} switched"
+                sub = (f"{lost_name} → {now_entry['name']}"
+                       f" @ {now_entry.get('volume', '?')}%")
+            else:
+                return
+            log.info("fallback alert: %s — %s", title, sub)
+            if not self.cfg.get("notify_fallback"):
+                return
+            import webview
             if self._alert_win is None:
                 self._make_alert_window()
             if not self._alert_primed:
-                # WebView2 never composites a frame for a window shown ONLY
-                # via the SW_SHOWNOACTIVATE path in _show_noactivate — it
-                # paints solid black until it has been through one normal
-                # (activating) show/hide cycle. This can only run once the
-                # webview GUI loop is live (webview.start() has returned
-                # control to its event loop), so it happens lazily here on
-                # first use rather than at pre-create time in App.run().
-                self._alert_win.move(-32000, -32000)  # off-screen: no flash
-                self._alert_win.show()
-                self._alert_win.hide()
-                self._alert_primed = True
+                # Priming normally happens up front via webview.start's func
+                # hook (App.run / _prime_alert_window). This is the defensive
+                # fallback for e.g. a window recreated after being closed.
+                self._prime_alert_window()
             self._alert_win.evaluate_js(
                 f"setAlert({json.dumps(kind)}, {json.dumps(title)}, {json.dumps(sub)})")
             screen = webview.screens[0]
