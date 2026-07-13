@@ -37,16 +37,20 @@ Test a build by running `dist\MicGuard.exe` and checking the log prints
 ## Shipping an update — one command
 
 ```powershell
-.\release.ps1                              # patch  1.2.0 -> 1.2.1
-.\release.ps1 -Bump minor                  # minor  1.2.1 -> 1.3.0
-.\release.ps1 -Bump major -Notes "..."     # major  1.3.0 -> 2.0.0
+.\release.ps1                              # interactive: suggests next version
+                                           #   from the latest tag, Enter accepts
+.\release.ps1 -Version 1.4.0               # non-interactive, exact version
+.\release.ps1 -Bump minor                  # non-interactive, bump from latest tag
+.\release.ps1 -Version 1.4.0 -Notes "..."  # with release notes
 ```
 
 The script (root of the repo):
-1. Refuses to run on a dirty working tree.
-2. Reads `VERSION = "x.y.z"` from `micguard.py` — **the single source of
-   truth; never edit a version number by hand** — bumps it, mirrors it into
-   `pyproject.toml`.
+1. Refuses to run on a dirty working tree or a tag that already exists.
+2. Decides the version **at build time** (latest released tag → suggestion →
+   your choice) and stamps it into `micguard.py` (`VERSION = "x.y.z"`, what
+   update checks compare against) and `pyproject.toml` — **never edit a
+   version number by hand**. If `micguard.py` was pre-set ahead of the tags
+   for a local test build, the suggestion is to release exactly that version.
 3. Rebuilds `dist\MicGuard.exe` with the flags above.
 4. Commits `Release vX.Y.Z`, creates an **annotated** tag, pushes commit + tag
    (annotated matters: `--follow-tags` ignores lightweight tags — learned the

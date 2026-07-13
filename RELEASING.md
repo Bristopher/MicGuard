@@ -1,28 +1,33 @@
 # Releasing a new MicGuard version
 
-The version number lives in exactly one place you ever think about:
-`VERSION = "x.y.z"` in `micguard.py`. Everything else (pyproject, git tag,
-GitHub release, what running apps compare against) is derived from it by the
-release script.
+The version is decided **at build time** by the release script. It looks at
+the latest released `vX.Y.Z` git tag, suggests the next version, and stamps
+your choice into both `micguard.py` (`VERSION = "x.y.z"` — what running apps
+compare against) and `pyproject.toml`. You never edit a version number by hand.
 
 ## The one command
 
 ```powershell
-.\release.ps1                              # patch: 1.0.0 -> 1.0.1
-.\release.ps1 -Bump minor                  # 1.0.1 -> 1.1.0
-.\release.ps1 -Bump major -Notes "Rewrite" # 1.1.0 -> 2.0.0
+.\release.ps1                              # interactive: shows the latest tag,
+                                           #   suggests the next version, Enter
+                                           #   accepts / type your own (e.g. 1.5.0)
+.\release.ps1 -Version 1.4.0               # non-interactive, exact version
+.\release.ps1 -Bump minor                  # non-interactive: bump from latest tag
+.\release.ps1 -Version 1.4.0 -Notes "..."  # with user-facing release notes
 ```
 
 That's it. The script:
 
-1. Refuses to run if the working tree has uncommitted changes.
-2. Reads `VERSION` from `micguard.py`, bumps the requested part, and writes
-   the new number back to both `micguard.py` and `pyproject.toml` — you never
-   edit a version number by hand.
-3. Rebuilds `dist\MicGuard.exe` (PyInstaller onefile, no console, shield icon,
-   `--collect-all customtkinter` for the UI theme assets).
-4. Commits `Release vX.Y.Z`, tags `vX.Y.Z`, pushes with `--follow-tags`.
-5. Publishes a GitHub release with the exe attached
+1. Refuses to run if the working tree has uncommitted changes, or if the
+   chosen tag already exists.
+2. Suggests the next version from the latest released tag (if `micguard.py`
+   was already set ahead of the tags for a local test build, it suggests
+   releasing exactly that).
+3. Stamps the chosen version into `micguard.py` + `pyproject.toml`.
+4. Rebuilds `dist\MicGuard.exe` (PyInstaller onefile, no console, shield icon,
+   `--collect-all webview` for the WebView2 UI).
+5. Commits `Release vX.Y.Z`, creates an annotated tag, pushes branch + tag.
+6. Publishes a GitHub release with the exe attached
    (`gh release create vX.Y.Z dist\MicGuard.exe`).
 
 ## How users get it
