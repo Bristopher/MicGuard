@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import webbrowser
 import winreg
@@ -220,7 +221,14 @@ def fetch_latest_release():
 
 
 def apply_update(release: dict) -> bool:
-    """Download the new exe and swap it in via a trampoline bat. Frozen only."""
+    """Download the new exe and swap it in. Frozen only.
+
+    Uses the rename-swap technique: Windows allows RENAMING a running exe
+    (just not overwriting it), so we rename ourselves aside, move the new exe
+    into our path, and start it. The previous trampoline-bat approach copied
+    over the exe and raced the PyInstaller bootstrap ("Failed to load Python
+    DLL ..._MEI..." on the user's first real update, 2026-07-12). The .old
+    file is cleaned up by the new process once we have fully exited."""
     asset = next(
         (a for a in release.get("assets", []) if a["name"].lower().endswith(".exe")),
         None,
@@ -233,25 +241,36 @@ def apply_update(release: dict) -> bool:
     )
     with urllib.request.urlopen(req, timeout=120) as resp, open(new_exe, "wb") as f:
         shutil.copyfileobj(resp, f)
+    if os.path.getsize(new_exe) < 5_000_000:
+        raise RuntimeError("downloaded exe is suspiciously small — refusing to install it")
     current = sys.executable
-    bat = os.path.join(CONFIG_DIR, "update.bat")
-    with open(bat, "w", encoding="ascii") as f:
-        f.write(
-            "@echo off\n"
-            ":wait\n"
-            "timeout /t 1 /nobreak >nul\n"
-            f'copy /y "{new_exe}" "{current}" >nul 2>&1\n'
-            "if errorlevel 1 goto wait\n"
-            f'del "{new_exe}"\n'
-            f'start "" "{current}"\n'
-            'del "%~f0"\n'
-        )
-    subprocess.Popen(
-        ["cmd", "/c", bat],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-        close_fds=True,
-    )
+    old = current + ".old"
+    try:
+        if os.path.exists(old):
+            os.remove(old)
+    except OSError:
+        pass
+    os.rename(current, old)
+    try:
+        shutil.move(new_exe, current)
+    except OSError:
+        os.rename(old, current)  # roll back so the install is never left broken
+        raise
+    # --updated: the new process waits for our singleton mutex to clear
+    subprocess.Popen([current, "--updated"], close_fds=True)
     return True
+
+
+def cleanup_old_exe():
+    """Delete the .old left behind by apply_update once the old process exits."""
+    old = sys.executable + ".old"
+    for _ in range(30):
+        try:
+            if os.path.exists(old):
+                os.remove(old)
+            return
+        except OSError:
+            time.sleep(1.0)
 
 
 def uninstall_self() -> None:
@@ -276,9 +295,19 @@ def uninstall_self() -> None:
         )
 
 
-def already_running() -> bool:
-    ctypes.windll.kernel32.CreateMutexW(None, False, f"Local\\{APP_NAME}Singleton")
-    return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+def already_running(wait_seconds: float = 0.0) -> bool:
+    """Acquire the single-instance mutex. With wait_seconds > 0 (the --updated
+    relaunch), poll until the exiting old process releases it."""
+    kernel32 = ctypes.windll.kernel32
+    deadline = time.time() + wait_seconds
+    while True:
+        handle = kernel32.CreateMutexW(None, False, f"Local\\{APP_NAME}Singleton")
+        if kernel32.GetLastError() != 183:  # ERROR_ALREADY_EXISTS
+            return False  # we hold it now (kept for process lifetime)
+        kernel32.CloseHandle(handle)
+        if time.time() >= deadline:
+            return True
+        time.sleep(0.25)
 
 
 # --------------------------------------------------------------------------
@@ -422,6 +451,57 @@ function save(){
 }
 </script></body></html>"""
 
+MENU_W, MENU_H = 248, 356
+
+MENU_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{color-scheme:dark}
+html,body{height:100%;background:#09090b}
+body{color:#fafafa;border:1px solid #27272a;padding:6px;user-select:none;
+     overflow:hidden;font:13px/1.4 'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif}
+.head{padding:8px 10px 7px}
+.head .t{font-weight:700;font-size:13.5px}
+.head .t span{color:#71717a;font-weight:400;font-size:11.5px}
+.head .s{color:#71717a;font-size:11.5px;margin-top:2px;white-space:nowrap;
+         overflow:hidden;text-overflow:ellipsis}
+hr{border:none;border-top:1px solid #27272a;margin:5px 4px}
+.item{display:flex;align-items:center;justify-content:space-between;gap:10px;
+      padding:8px 10px;border-radius:6px;cursor:pointer}
+.item:hover{background:#18181b}
+.item.quit:hover{background:#26090b;color:#f87171}
+.sw{position:relative;width:32px;height:18px;flex:none}
+.sw .k{position:absolute;inset:0;background:#27272a;border-radius:999px;transition:background .12s}
+.sw .k::before{content:"";position:absolute;width:12px;height:12px;border-radius:50%;
+      background:#fafafa;top:3px;left:3px;transition:transform .12s}
+.sw.on .k{background:#22c55e}
+.sw.on .k::before{transform:translateX(14px)}
+</style></head><body>
+<div class="head">
+  <div class="t">MicGuard <span id="ver"></span></div>
+  <div class="s" id="status"></div>
+</div>
+<hr>
+<div class="item" onclick="pywebview.api.toggle_enforce()"><span>Enforce mic + volume</span>
+  <span class="sw" id="sw"><span class="k"></span></span></div>
+<div class="item" onclick="pywebview.api.settings()"><span>Settings&hellip;</span></div>
+<div class="item" onclick="pywebview.api.reapply()"><span>Re-apply now</span></div>
+<hr>
+<div class="item" onclick="pywebview.api.updates()"><span>Check for updates</span></div>
+<div class="item" onclick="pywebview.api.uninstall()"><span>Uninstall&hellip;</span></div>
+<hr>
+<div class="item quit" onclick="pywebview.api.quit()"><span>Quit MicGuard</span></div>
+<script>
+async function refreshMenu(){
+  const s = await pywebview.api.get_state();
+  document.getElementById('ver').textContent = 'v' + s.version;
+  document.getElementById('status').textContent = s.status;
+  document.getElementById('sw').classList.toggle('on', s.enforce);
+}
+window.addEventListener('pywebviewready', refreshMenu);
+window.addEventListener('blur', () => pywebview.api.hide_menu());
+</script></body></html>"""
+
 DIALOG_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><style>
 """ + BASE_CSS + """
@@ -562,6 +642,7 @@ class App:
         self.enforcer = Enforcer(self)
         self.icon = None
         self._settings_win = None
+        self._menu_win = None
 
     # ---- tray ----
 
@@ -615,13 +696,15 @@ class App:
             APP_NAME, self._make_icon_image(), f"{APP_NAME} v{VERSION}", menu
         )
         self.icon.run_detached()
+        self._patch_tray_clicks()
         # pywebview owns the main thread: a hidden master window keeps its GUI
         # loop alive so settings/dialog windows can be created later from ANY
         # thread. Destroying every window (incl. the master) exits the app.
         webview.create_window(APP_NAME, html="<html></html>", hidden=True,
                               background_color="#09090b")
-        # settings window is pre-created hidden so opening it later is instant
+        # settings + tray menu pre-created hidden so opening them is instant
         self._make_settings_window(hidden=not self.first_run)
+        self._make_menu_window(hidden=True)
         webview.start()
         # every window destroyed -> we are quitting
         try:
@@ -734,10 +817,17 @@ class App:
                     pass
 
         lines = sum(max(1, (len(line) // 52) + 1) for line in message.split("\n"))
+        width, height = 430, min(560, 158 + 21 * lines)
+        try:
+            screen = webview.screens[0]
+            pos = {"x": (screen.width - width) // 2,
+                   "y": (screen.height - height) // 2}
+        except Exception:
+            pos = {}
         win = webview.create_window(
-            APP_NAME, html=html, js_api=Api(), width=430,
-            height=min(560, 158 + 21 * lines), frameless=True,
-            on_top=True, resizable=False, background_color="#09090b")
+            APP_NAME, html=html, js_api=Api(), width=width, height=height,
+            frameless=True, on_top=True, resizable=False,
+            background_color="#09090b", **pos)
         win.events.closed += done.set
         done.wait()
         return result["yes"]
@@ -843,6 +933,108 @@ class App:
             self._settings_win = None
             self._make_settings_window(hidden=False)
 
+    # ---- tray menu (themed) ----
+    # The native Win32 tray menu cannot be styled, so right-click opens this
+    # frameless webview menu at the cursor instead. Persistent hide/show like
+    # the settings window; hides itself on blur like a real menu.
+
+    def _make_menu_window(self, hidden: bool = True):
+        import webview
+        app = self
+
+        def spawn(fn):
+            app._hide_menu()
+            threading.Thread(target=fn, daemon=True).start()
+
+        class Api:
+            def get_state(self_api):
+                return {"version": VERSION, "status": app._status_text(),
+                        "enforce": bool(app.cfg["enforce"])}
+
+            def toggle_enforce(self_api):
+                app._toggle_enforce(None, None)
+                try:
+                    app._menu_win.evaluate_js("refreshMenu()")
+                except Exception:
+                    pass
+
+            def settings(self_api):
+                app._hide_menu()
+                app.open_settings()
+
+            def reapply(self_api):
+                app._hide_menu()
+                app.enforcer.poke()
+                app._notify("Re-applied mic + volume")
+
+            def updates(self_api):
+                spawn(app._manual_update_check)
+
+            def uninstall(self_api):
+                spawn(app._uninstall)
+
+            def quit(self_api):
+                app._quit()
+
+            def hide_menu(self_api):
+                app._hide_menu()
+
+        self._menu_win = webview.create_window(
+            f"{APP_NAME} Menu", html=MENU_HTML, js_api=Api(),
+            width=MENU_W, height=MENU_H, frameless=True, on_top=True,
+            resizable=False, hidden=hidden, background_color="#09090b")
+        self._menu_win.events.closed += lambda: setattr(self, "_menu_win", None)
+
+    def _hide_menu(self):
+        try:
+            if self._menu_win:
+                self._menu_win.hide()
+        except Exception:
+            pass
+
+    def open_menu(self):
+        import webview
+        if self._menu_win is None:
+            self._make_menu_window(hidden=True)
+        try:
+            # anchor like a native tray menu: bottom-left corner at the cursor
+            # (menu grows up-right; flip when the cursor is near an edge)
+            pt = ctypes.wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            screen = webview.screens[0]
+            x = max(8, min(pt.x, screen.width - MENU_W - 8))
+            y = pt.y - MENU_H - 4
+            if y < 8:
+                y = pt.y + 4
+            self._menu_win.evaluate_js("typeof refreshMenu === 'function' && refreshMenu()")
+            self._menu_win.move(x, y)
+            self._menu_win.show()
+        except Exception as e:
+            log.warning("themed tray menu failed: %s", e)
+
+    def _patch_tray_clicks(self):
+        """Reroute tray clicks: left → Settings, right → the themed menu.
+        pystray's WM_NOTIFY handler lives in icon._message_handlers; if the
+        pystray internals ever change, we fall back to the native menu."""
+        try:
+            original = self.icon._on_notify
+
+            def on_notify(wparam, lparam):
+                if lparam == 0x0202:      # WM_LBUTTONUP
+                    self.open_settings()
+                elif lparam == 0x0205:    # WM_RBUTTONUP
+                    self.open_menu()
+
+            patched = False
+            for msg, handler in list(self.icon._message_handlers.items()):
+                if handler == original:
+                    self.icon._message_handlers[msg] = on_notify
+                    patched = True
+            if not patched:
+                raise RuntimeError("WM_NOTIFY handler not found")
+        except Exception as e:
+            log.warning("tray patch failed — using native menu: %s", e)
+
 
 def main():
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -852,9 +1044,11 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
     log.info("%s v%s starting (frozen=%s)", APP_NAME, VERSION, IS_FROZEN)
-    if already_running():
+    if already_running(15.0 if "--updated" in sys.argv else 0.0):
         log.info("another instance is running; exiting")
         return
+    if IS_FROZEN:
+        threading.Thread(target=cleanup_old_exe, daemon=True).start()
     app = App()
     if app.first_run and app.cfg.get("run_at_startup"):
         try:

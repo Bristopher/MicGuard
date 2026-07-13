@@ -21,7 +21,7 @@ a JSON config, a log file, and one `HKCU\...\Run` registry value.
 | Language | Python 3.13 (`requires-python >=3.11`) | What the repo grew up in; `dict \| dict` merge and `str \| None` syntax are used, hence the 3.11 floor |
 | Audio API | **pycaw** + **comtypes** | The only maintained Python bindings to Windows Core Audio (`IMMDeviceEnumerator`, `IAudioEndpointVolume`, event callbacks). Replaced the old `nircmd.exe` shell-outs — direct COM calls are ~instant and give us *callbacks* instead of polling |
 | Set-default-device | `IPolicyConfig` COM interface, hand-declared in `micguard.py` | Windows has **no public API** to set the default audio device. This undocumented-but-stable-since-Win7 interface is what SoundSwitch/EarTrumpet use. Only `SetDefaultEndpoint` is called; earlier vtable slots are placeholder `COMMETHOD`s (slot *count* must stay exact — see Gotchas) |
-| Tray icon | **pystray** (+ **Pillow** to draw the shield-mic glyph) | De-facto standard, ctypes-based on Windows (no pywin32 dependency). Runs detached; left-click opens Settings (`default=True` menu item) |
+| Tray icon | **pystray** (+ **Pillow** to draw the shield-mic glyph) | De-facto standard, ctypes-based on Windows (no pywin32 dependency). Runs detached. Native Win32 tray menus can't be themed, so `_patch_tray_clicks` swaps pystray's `WM_NOTIFY` handler: left-click → Settings, right-click → the themed `MENU_HTML` webview menu at the cursor (auto-hides on blur). The native pystray menu definition stays as the fallback if the patch ever breaks on a pystray update |
 | Settings/dialog UI | **pywebview** (WebView2) — real HTML/CSS | The user rejected two native-toolkit designs (ttk, then CustomTkinter) — tkinter-family UIs were ruled out outright. pywebview renders frameless windows with actual shadcn/zinc CSS in Windows' built-in WebView2 for a few MB (vs ~200 MB for Electron), no Node/React build step. Templates live IN `micguard.py` (`SETTINGS_HTML`/`DIALOG_HTML`); JS↔Python via `js_api`. Frozen builds REQUIRE `--collect-all webview`; friends' PCs need the WebView2 runtime (ships with Win11/Edge) |
 | Config | JSON at `%APPDATA%\MicGuard\config.json` (stdlib `json`) | Human-readable, trivially merged with defaults on load |
 | Startup | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via stdlib `winreg` | Per-user, no admin, no Task Scheduler — an explicit product requirement |
@@ -114,10 +114,15 @@ idle cost.
 **Update flow (user-consented, never silent):** on launch (if
 `check_updates`) and via tray → *Check for updates*: fetch
 `releases/latest` → newer tag? → **yes/no dialog**. Accept → download the
-`.exe` asset to `%APPDATA%\MicGuard\MicGuard.new.exe`, spawn `update.bat`
-(wait-loop → `copy /y` over `sys.executable` → restart → self-delete), quit.
-Any failure → info dialog with the releases URL + `webbrowser.open` so the
-user can download manually. Version comparison is `parse_version` on
+`.exe` asset, then **rename-swap**: rename the running exe to `.old`
+(Windows allows renaming a running image, just not overwriting it), move the
+new exe into place, spawn it with `--updated` (which makes `already_running`
+wait up to 15 s for the old process's mutex), quit; the new process deletes
+the `.old`. NEVER go back to a copy-over-the-exe trampoline bat — that
+raced the PyInstaller onefile bootstrap and produced "Failed to load Python
+DLL ..._MEI..." on the first real user update (2026-07-12). Any failure →
+info dialog with the releases URL + `webbrowser.open` (a failed swap rolls
+the rename back). Version comparison is `parse_version` on
 `VERSION = "x.y.z"` — the single source of truth that `release.ps1` bumps.
 
 **Uninstall flow:** tray → *Uninstall…* → confirm dialog → delete Run key +

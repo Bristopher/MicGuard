@@ -53,6 +53,16 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 2. Click the volume number, type a value, hit Enter → slider jumps, Save holds that %.
 3. Click "GitHub ↗" → your browser opens the repo.
 
+## 5. v1.3.2 — themed right-click tray menu, centered dialogs, update-swap fix (~3 min)
+
+**Shipped:** `v1.3.2` release commits on 2026-07-12 — right-click on the tray icon now opens a themed webview menu at the cursor (native Win32 menus can't be styled; pystray's click handler is patched, native menu kept as fallback); update/uninstall dialogs open screen-centered; **the in-place update mechanism was rebuilt** after your v1.3.0→v1.3.1 update failed with "Failed to load Python DLL ..._MEI..." — the trampoline bat raced PyInstaller's bootstrap, replaced by rename-swap (running exe renames itself aside; new exe starts with `--updated` and waits for the old one's mutex; `.old` cleaned up on next start).
+**Machine-verified:** menu renders fully (screenshot incl. Quit row), status line + enforce switch state live, blur→auto-hide fires, dialog centers (8 px shadow tolerance), singleton logic, syntax/imports.
+
+1. **The update flow, again — this is the real test of the DLL-error fix.** Your installed copy is v1.3.1-broken-updater vintage; I've hand-installed v1.3.2, so the NEXT release is the true end-to-end test: accept the dialog, the app should blink and come back as the new version, no error box. A `MicGuard.exe.old` appearing briefly next to the exe is normal.
+2. **Right-click the tray icon** — the themed menu should pop up exactly at your cursor, hide when you click elsewhere, and every row must work: Enforce toggle (switch flips in place), Settings, Re-apply now (toast), Check for updates, Uninstall (press **Keep it**), Quit — Quit last, it exits the app.
+3. **Tray menu judgment call**: the enforce switch toggles without closing the menu — right, or should it close?
+4. Check for updates from the menu → the "Up to date" toast; the *consent dialog* next release should appear dead-center of the screen.
+
 ---
 
 ## Sweep log (commit ranges reviewed for unverified work)
