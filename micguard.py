@@ -178,6 +178,41 @@ def get_endpoint_meter(device_id: str):
     return cast(interface, POINTER(IAudioMeterInformation))
 
 
+def _co_initialize():
+    """CoInitialize for webview js_api worker threads — idempotent, never
+    raises. Rule 2: any thread that touches Core Audio initializes COM first."""
+    try:
+        import comtypes
+        comtypes.CoInitialize()
+    except Exception:
+        pass
+
+
+def _session_names():
+    """Sorted unique exe names that currently own an audio session — the
+    hotkey-target choices offered by the settings window."""
+    _co_initialize()
+    try:
+        return sorted({s.Process.name() for s in AudioUtilities.GetAllSessions()
+                       if s.Process})
+    except Exception as e:
+        log.warning("audio session enumeration failed: %s", e)
+        return []
+
+
+def _profile_name_error(cfg: dict, name: str, current: str | None = None):
+    """None if name is a valid (new) profile name, else the reason. Quotes and
+    angle brackets are rejected because names are rendered into menu rows."""
+    if not name:
+        return "Name cannot be empty"
+    if any(c in name for c in '"<>'):
+        return 'Name cannot contain " < or >'
+    if any(p.get("name") == name for p in cfg.get("profiles", [])
+           if p.get("name") != current):
+        return "A profile with that name already exists"
+    return None
+
+
 # ---- "hear yourself" passthrough (WASAPI shared-mode capture → render) ----
 # pycaw ships IAudioClient but not the capture/render service interfaces;
 # declared here like IPolicyConfig rather than adding an audio-IO dependency.
@@ -519,17 +554,60 @@ button.btn{height:36px;padding:0 16px;border-radius:8px;border:1px solid transpa
 SETTINGS_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><style>
 """ + BASE_CSS + """
-.sub{color:#a1a1aa;font-size:13px;margin:2px 0 22px}
+.sub{color:#a1a1aa;font-size:13px;margin:2px 0 14px}
+.content{overflow-y:auto;max-height:560px;margin:0 -10px;padding:0 10px 4px}
+.content::-webkit-scrollbar{width:8px}
+.content::-webkit-scrollbar-thumb{background:#27272a;border-radius:999px}
+.content::-webkit-scrollbar-thumb:hover{background:#3f3f46}
 label{display:block;font-size:13px;font-weight:600;margin-bottom:8px}
+.dim{color:#71717a;font-weight:400;font-size:11.5px}
 .select-wrap{position:relative}
-select{appearance:none;width:100%;height:38px;background:#09090b;border:1px solid #27272a;
-       border-radius:8px;color:#fafafa;padding:0 32px 0 12px;font:13px 'Segoe UI';
-       outline:none;cursor:pointer}
+select{appearance:none;width:100%;height:32px;background:#09090b;border:1px solid #27272a;
+       border-radius:8px;color:#fafafa;padding:0 28px 0 10px;font:12.5px 'Segoe UI';
+       outline:none;cursor:pointer;text-overflow:ellipsis}
 select:hover{background:#18181b}
 select:focus{border-color:#3f3f46}
-.select-wrap::after{content:"\\2304";position:absolute;right:13px;top:4px;
-       color:#71717a;pointer-events:none;font-size:14px}
-.vol-row{display:flex;justify-content:space-between;align-items:center;margin-top:22px}
+select:disabled{opacity:.4;cursor:default}
+.select-wrap::after{content:"\\2304";position:absolute;right:11px;top:1px;
+       color:#71717a;pointer-events:none;font-size:13px}
+.sbtn{height:32px;padding:0 11px;border-radius:8px;border:1px solid #27272a;flex:none;
+      background:transparent;color:#fafafa;font:600 12px 'Segoe UI';cursor:pointer}
+.sbtn:hover{background:#18181b}
+.sbtn:disabled{opacity:.4;cursor:default;background:transparent}
+.profrow,.addrow,.promptrow{display:flex;gap:6px;align-items:center}
+.profrow .select-wrap,.addrow .select-wrap,.promptrow input{flex:1;min-width:0}
+.promptrow{margin-top:8px}
+.promptrow input{height:32px;background:#09090b;border:1px solid #27272a;border-radius:8px;
+      color:#fafafa;padding:0 10px;font:12.5px 'Segoe UI';outline:none}
+.promptrow input:focus{border-color:#3f3f46}
+.err{color:#f87171;font-size:12px;margin-top:6px}
+.sec{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:20px 0 8px}
+.sec label{margin:0}
+.addrow{margin-top:2px}
+.devrow{display:flex;align-items:center;gap:7px;padding:6px 8px;border:1px solid #27272a;
+        border-radius:8px;margin-bottom:6px}
+.devrow .ord{display:flex;flex-direction:column;flex:none;line-height:1}
+.devrow .ord a{color:#71717a;cursor:pointer;font-size:8px;padding:1px 3px;border-radius:3px}
+.devrow .ord a:hover{color:#fafafa;background:#27272a}
+.devrow .dname{flex:1;min-width:0;font-size:12.5px;white-space:nowrap;overflow:hidden;
+        text-overflow:ellipsis}
+.dis{color:#71717a;font-size:11px}
+.mini{position:relative;flex:none;cursor:pointer;margin:0}
+.mini input{position:absolute;opacity:0}
+.mini span{display:inline-block;font:600 10px 'Segoe UI';color:#71717a;
+      border:1px solid #27272a;border-radius:5px;padding:2px 6px}
+.mini span::before{content:"hold"}
+.mini input:checked + span{color:#22c55e;border-color:#22c55e}
+.dvol{width:34px;flex:none;background:transparent;border:1px solid transparent;
+      border-radius:5px;color:#fafafa;font:600 12.5px 'Segoe UI';text-align:right;
+      outline:none;padding:2px 3px;font-variant-numeric:tabular-nums}
+.dvol:hover{border-color:#27272a}
+.dvol:focus{border-color:#3f3f46;background:#18181b}
+.pctx{color:#71717a;font-size:11.5px;flex:none;margin-left:-5px}
+.del{color:#71717a;cursor:pointer;font-size:11px;flex:none;padding:2px 4px;border-radius:4px}
+.del:hover{color:#f87171;background:#27272a}
+.empty{color:#71717a;font-size:12px;padding:2px 2px 6px}
+.vol-row{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
 .vol-row label{margin:0}
 .volwrap{display:flex;align-items:center;gap:2px}
 #volv{width:44px;background:transparent;border:1px solid transparent;border-radius:6px;
@@ -539,14 +617,14 @@ select:focus{border-color:#3f3f46}
 #volv:focus{border-color:#3f3f46;background:#18181b}
 .volwrap .pct{font-size:14px;font-weight:600;color:#fafafa}
 input[type=range]{-webkit-appearance:none;width:100%;height:6px;border-radius:999px;
-       background:#27272a;outline:none;margin:16px 0 4px;cursor:pointer}
+       background:#27272a;outline:none;margin:14px 0 4px;cursor:pointer}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
        border-radius:50%;background:#fafafa;box-shadow:0 1px 3px rgba(0,0,0,.5);cursor:pointer}
 hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .switchrow{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:9px 0}
 .switchrow .lab{font-size:13.5px;font-weight:500}
 .switchrow .hint{font-size:12px;color:#71717a;margin-top:1px}
-.switch{position:relative;width:38px;height:22px;flex:none}
+.switch{position:relative;width:38px;height:22px;flex:none;margin:0}
 .switch input{position:absolute;opacity:0}
 .knob{position:absolute;inset:0;background:#27272a;border-radius:999px;
        transition:background .15s;cursor:pointer}
@@ -558,31 +636,71 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
     text-decoration:none;cursor:pointer}
 .gh:hover{color:#fafafa;text-decoration:underline}
 .meter{height:5px;background:#18181b;border:1px solid #27272a;border-radius:999px;
-       margin-top:10px;overflow:hidden}
+       margin-top:14px;overflow:hidden}
 #meterfill{height:100%;width:0%;background:#22c55e;border-radius:999px;
        transition:width .06s linear}
-.recrow{display:flex;justify-content:flex-end;margin-top:2px}
-.rec{color:#71717a;font-size:12px;text-decoration:none;cursor:pointer}
+.rec{color:#71717a;font-size:12px;text-decoration:none;cursor:pointer;flex:none}
 .rec:hover{color:#fafafa;text-decoration:underline}
+.hkrow{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.hkkeys{flex:1;min-width:0;height:30px;background:#09090b;border:1px solid #27272a;
+      border-radius:8px;color:#fafafa;padding:0 8px;font:600 11.5px Consolas,monospace;
+      outline:none;text-align:center;cursor:pointer;caret-color:transparent}
+.hkkeys:focus{border-color:#22c55e}
+.hksel{width:132px;flex:none}
+.hksel select{height:30px;font-size:12px}
+.hkstep{width:34px;flex:none;height:30px;background:#09090b;border:1px solid #27272a;
+      border-radius:8px;color:#fafafa;font:600 12px 'Segoe UI';text-align:center;outline:none}
+.hkstep:focus{border-color:#3f3f46}
+.addlink{color:#71717a;font-size:12px;text-decoration:none;cursor:pointer}
+.addlink:hover{color:#fafafa;text-decoration:underline}
 </style></head><body>
 <div class="header pywebview-drag-region">
   <h1>MicGuard</h1><span class="ver" id="ver"></span>
   <button class="close" onclick="pywebview.api.cancel()">&#x2715;</button>
 </div>
-<p class="sub">Keeps your mic and its volume exactly where you set them</p>
-<label for="mic">Microphone to guard</label>
-<div class="select-wrap"><select id="mic"></select></div>
+<p class="sub">Keeps your devices and volumes exactly where you set them</p>
+<div class="content">
+<label for="profsel">Profile</label>
+<div class="profrow">
+  <div class="select-wrap"><select id="profsel" onchange="refresh(this.value)"></select></div>
+  <button class="sbtn" onclick="promptProfile('new')">New</button>
+  <button class="sbtn" onclick="promptProfile('rename')">Rename</button>
+  <button class="sbtn" id="delprof" onclick="deleteProfile()">Delete</button>
+</div>
+<div class="promptrow" id="profprompt" style="display:none">
+  <input id="profname" maxlength="40" spellcheck="false" placeholder="Profile name">
+  <button class="sbtn" onclick="profileOk()">OK</button>
+  <button class="sbtn" onclick="profileCancel()">Cancel</button>
+</div>
+<div class="err" id="proferr" style="display:none"></div>
+
+<div class="sec"><label>Microphones <span class="dim">(priority order)</span></label>
+  <a class="rec" id="reclink" href="javascript:void(0)" onclick="useRecommended()">Use recommended</a></div>
+<div id="miclist"></div>
+<div class="addrow"><div class="select-wrap"><select id="addmic"></select></div>
+  <button class="sbtn" id="addmicbtn" onclick="addDev('mic')">+ Add fallback</button></div>
+
 <div class="meter"><div id="meterfill"></div></div>
 <div class="vol-row"><label>Volume to hold</label>
   <span class="volwrap"><input id="volv" inputmode="numeric" maxlength="3"><span class="pct">%</span></span></div>
 <input type="range" id="vol" min="0" max="100" value="85">
-<div class="recrow"><a class="rec" href="javascript:void(0)" onclick="useRecommended()"
-  id="reclink">Use recommended settings</a></div>
 <div class="switchrow">
   <div><div class="lab">Hear yourself</div>
-       <div class="hint">Plays this mic through your speakers while you adjust &mdash; off when settings closes</div></div>
+       <div class="hint">Plays your mic through your speakers while you adjust &mdash; off when settings closes</div></div>
   <label class="switch"><input type="checkbox" id="sw_hear"><span class="knob"></span></label>
 </div>
+
+<div class="sec"><label>Headphones / Speakers <span class="dim">(priority order)</span></label></div>
+<div id="outlist"></div>
+<div class="addrow"><div class="select-wrap"><select id="addout"></select></div>
+  <button class="sbtn" id="addoutbtn" onclick="addDev('out')">+ Add fallback</button></div>
+
+<div class="sec"><label>Hotkeys <span class="dim">(volume nudges)</span></label>
+  <label class="switch"><input type="checkbox" id="sw_hotkeys"
+    onchange="S && (S.hotkeys.enabled = this.checked)"><span class="knob"></span></label></div>
+<div id="hklist"></div>
+<a class="addlink" href="javascript:void(0)" onclick="addHk()">+ Add binding</a>
+
 <hr>
 <div class="switchrow">
   <div><div class="lab">Enforce mic + volume</div>
@@ -599,6 +717,12 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
        <div class="hint">Always asks before installing anything</div></div>
   <label class="switch"><input type="checkbox" id="sw_updates"><span class="knob"></span></label>
 </div>
+<div class="switchrow">
+  <div><div class="lab">Fallback alerts</div>
+       <div class="hint">Popup when your device disconnects and MicGuard switches to a fallback</div></div>
+  <label class="switch"><input type="checkbox" id="sw_fallback"><span class="knob"></span></label>
+</div>
+</div>
 <div class="btns">
   <a class="gh" href="javascript:void(0)" onclick="pywebview.api.open_github()">GitHub &#x2197;</a>
   <button class="btn secondary" onclick="pywebview.api.cancel()">Cancel</button>
@@ -607,20 +731,34 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 <script>
 const vol = document.getElementById('vol'), volv = document.getElementById('volv');
 const hear = document.getElementById('sw_hear');
-let recommended = 85;
+let S = null, recommended = 85, promptMode = null, lastTargetId = null;
+const esc = s => String(s).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function listOf(flow){ return flow === 'out' ? S.outputs : S.mics; }
+// the slider / meter / hear-yourself all target the first CONNECTED mic —
+// the one the Enforcer will actually hold
+function micTarget(){ return S ? S.mics.findIndex(d => d.connected) : -1; }
 function paint(){
   if (document.activeElement !== volv) volv.value = vol.value;
   vol.style.background = `linear-gradient(to right,#22c55e ${vol.value}%,#27272a ${vol.value}%)`;
 }
 // while hearing yourself, volume changes apply to the mic instantly
 function preview(){ if (hear.checked) pywebview.api.preview_volume(+vol.value); }
-vol.addEventListener('input', () => { paint(); preview(); });
+function sliderToRow(){
+  const t = micTarget();
+  if (t < 0) return;
+  S.mics[t].volume = +vol.value;
+  const el = document.querySelector(`.devrow[data-flow="mic"][data-i="${t}"] .dvol`);
+  if (el) el.value = vol.value;
+}
+vol.addEventListener('input', () => { paint(); sliderToRow(); preview(); });
 // the number is editable: digits only, clamped 0-100, live-syncs the slider
 volv.addEventListener('input', () => {
   volv.value = volv.value.replace(/[^0-9]/g, '');
   if (volv.value !== '') {
     vol.value = Math.min(100, +volv.value);
     vol.style.background = `linear-gradient(to right,#22c55e ${vol.value}%,#27272a ${vol.value}%)`;
+    sliderToRow();
     preview();
   }
 });
@@ -632,49 +770,217 @@ function setMeter(p){
   document.getElementById('meterfill').style.width =
     Math.min(100, Math.round(Math.sqrt(p) * 100)) + '%';
 }
-function useRecommended(){ vol.value = recommended; paint(); preview(); }
-// swapping mics: guard the new mic by default and adopt ITS current volume
-document.getElementById('mic').addEventListener('change', async () => {
-  const r = await pywebview.api.mic_changed(document.getElementById('mic').value);
-  if (r && r.volume !== null && r.volume !== undefined) { vol.value = r.volume; paint(); }
-  document.getElementById('sw_enforce').checked = true;
-});
+function useRecommended(){
+  if (S && S.mics.length){ S.mics[0].volume = recommended; renderList('mic'); }
+}
+
+// ---- device priority lists (working copy lives here; Save persists it) ----
+function rowHtml(flow, i, d){
+  const isOut = flow === 'out';
+  return `<div class="devrow" data-flow="${flow}" data-i="${i}">
+    <span class="ord"><a onclick="moveDev('${flow}',${i},-1)">&#9650;</a><a
+      onclick="moveDev('${flow}',${i},1)">&#9660;</a></span>
+    <span class="dname" title="${esc(d.name)}">${i+1}. ${esc(d.name)}${
+      d.connected ? '' : ' <span class="dis">(not connected)</span>'}</span>
+    ${isOut ? `<label class="mini" title="Hold volume &mdash; keep enforcing it, not just set once"><input
+      type="checkbox"${d.hold_volume ? ' checked' : ''}
+      onchange="editDev('out',${i},'hold_volume',this.checked)"><span></span></label>` : ''}
+    <input class="dvol" value="${d.volume}" inputmode="numeric" maxlength="3"
+      oninput="this.value=this.value.replace(/[^0-9]/g,'')"
+      onchange="editDev('${flow}',${i},'volume',this.value)"><span class="pctx">%</span>
+    <a class="del" onclick="removeDev('${flow}',${i})">&#x2715;</a></div>`;
+}
+function renderList(flow){
+  const l = listOf(flow);
+  document.getElementById(flow === 'out' ? 'outlist' : 'miclist').innerHTML =
+    l.length ? l.map((d, i) => rowHtml(flow, i, d)).join('')
+             : '<div class="empty">Nothing here yet &mdash; add a device below</div>';
+  renderAdd(flow);
+  if (flow === 'mic') syncMicTarget();
+}
+function renderAdd(flow){
+  const all = flow === 'out' ? S.all_outputs : S.all_mics;
+  const have = new Set(listOf(flow).map(d => d.id));
+  const opts = all.filter(p => !have.has(p[0]));
+  const sel = document.getElementById(flow === 'out' ? 'addout' : 'addmic');
+  sel.innerHTML = opts.map(p =>
+    `<option value="${esc(p[0])}">${esc(p[1])}</option>`).join('');
+  sel.disabled = !opts.length;
+  document.getElementById(flow === 'out' ? 'addoutbtn' : 'addmicbtn').disabled = !opts.length;
+}
+function editDev(flow, i, key, val){
+  const l = listOf(flow);
+  if (!l[i]) return;
+  if (key === 'volume') val = Math.min(100, (+String(val).replace(/[^0-9]/g, '')) || 0);
+  l[i][key] = val;
+  renderList(flow);
+}
+function moveDev(flow, i, dir){
+  const l = listOf(flow), j = i + dir;
+  if (j < 0 || j >= l.length) return;
+  [l[i], l[j]] = [l[j], l[i]];
+  renderList(flow);
+}
+function removeDev(flow, i){ listOf(flow).splice(i, 1); renderList(flow); }
+async function addDev(flow){
+  const sel = document.getElementById(flow === 'out' ? 'addout' : 'addmic');
+  const id = sel.value;
+  if (!id) return;
+  const name = sel.options[sel.selectedIndex].textContent;
+  // v1.4 adoption rule: a newly guarded device starts at its CURRENT volume
+  const volume = await pywebview.api.device_volume(id);
+  const entry = {id, name, volume, connected: true};
+  if (flow === 'out') entry.hold_volume = false;
+  listOf(flow).push(entry);
+  renderList(flow);
+}
+async function syncMicTarget(){
+  const t = micTarget();
+  const d = t >= 0 ? S.mics[t] : null;
+  vol.value = d ? d.volume : recommended;
+  paint();
+  pywebview.api.meter_device(d ? d.id : null);
+  if (hear.checked){
+    if (!d){ hear.checked = false; pywebview.api.set_monitor(null, false); }
+    else if (d.id !== lastTargetId) pywebview.api.set_monitor(d.id, true);
+  }
+  lastTargetId = d ? d.id : null;
+}
 hear.addEventListener('change', async () => {
-  const on = await pywebview.api.set_monitor(document.getElementById('mic').value, hear.checked);
+  const t = micTarget();
+  const on = await pywebview.api.set_monitor(t >= 0 ? S.mics[t].id : null, hear.checked);
   hear.checked = on;
   if (!on) preview();  // monitor off — nothing left holding the live volume
 });
-async function refresh(){
-  const s = await pywebview.api.get_state();
-  document.getElementById('ver').textContent = 'v' + s.version;
+
+// ---- profiles (New copies the selected profile; Save sets it active) ----
+function profErr(msg){
+  const e = document.getElementById('proferr');
+  e.textContent = msg;
+  e.style.display = msg ? 'block' : 'none';
+}
+function promptProfile(mode){
+  promptMode = mode;
+  const inp = document.getElementById('profname');
+  inp.value = mode === 'rename' ? document.getElementById('profsel').value : '';
+  document.getElementById('profprompt').style.display = 'flex';
+  profErr('');
+  inp.focus();
+}
+function profileCancel(){
+  promptMode = null;
+  document.getElementById('profprompt').style.display = 'none';
+  profErr('');
+}
+async function profileOk(){
+  const name = document.getElementById('profname').value.trim();
+  const sel = document.getElementById('profsel').value;
+  if (!name) return profErr('Name cannot be empty');
+  if (/["<>]/.test(name)) return profErr('Name cannot contain " < or >');
+  if (S.profiles.includes(name) && !(promptMode === 'rename' && name === sel))
+    return profErr('A profile with that name already exists');
+  const r = promptMode === 'rename'
+    ? await pywebview.api.rename_profile(sel, name)
+    : await pywebview.api.new_profile(name, sel);
+  if (!r || !r.ok) return profErr((r && r.error) || 'Something went wrong');
+  profileCancel();
+  refresh(name);
+}
+async function deleteProfile(){
+  if (!S || S.profiles.length <= 1) return;
+  const r = await pywebview.api.delete_profile(document.getElementById('profsel').value);
+  if (r && r.ok) refresh(r.active);
+}
+
+// ---- hotkeys (persisted on Save; wired to the hotkey engine after that) ----
+function hkRowHtml(b, i){
+  const opts = ['system', ...S.sessions.map(x => 'app:' + x)];
+  if (b.target && !opts.includes(b.target)) opts.push(b.target);
+  return `<div class="hkrow">
+    <input class="hkkeys" value="${esc(b.keys)}" placeholder="press keys&hellip;"
+      spellcheck="false" onkeydown="hkCapture(event,${i})">
+    <div class="select-wrap hksel"><select
+      onchange="S.hotkeys.bindings[${i}].target=this.value">${
+      opts.map(o => `<option value="${esc(o)}"${o === b.target ? ' selected' : ''}>${
+        esc(o === 'system' ? 'System volume' : o.replace(/^app:/, ''))}</option>`).join('')
+    }</select></div>
+    <input class="hkstep" value="${b.step}" maxlength="3" title="Step, &plusmn;1&ndash;10"
+      oninput="this.value=this.value.replace(/[^0-9-]/g,'')" onchange="hkStep(${i},this)">
+    <a class="del" onclick="removeHk(${i})">&#x2715;</a></div>`;
+}
+function renderHk(){
+  document.getElementById('hklist').innerHTML =
+    S.hotkeys.bindings.map((b, i) => hkRowHtml(b, i)).join('');
+  document.getElementById('sw_hotkeys').checked = !!S.hotkeys.enabled;
+}
+// combo capture: focus the field and press keys; Escape clears
+function hkCapture(e, i){
+  e.preventDefault();
+  if (e.key === 'Escape'){ S.hotkeys.bindings[i].keys = ''; e.target.value = ''; return; }
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+  let k = e.key.toLowerCase();
+  if (k === ' ') k = 'space';
+  if (k.startsWith('arrow')) k = k.slice(5);
+  const combo = (e.ctrlKey ? 'ctrl+' : '') + (e.altKey ? 'alt+' : '')
+              + (e.shiftKey ? 'shift+' : '') + (e.metaKey ? 'meta+' : '') + k;
+  S.hotkeys.bindings[i].keys = combo;
+  e.target.value = combo;
+}
+function hkStep(i, el){
+  let v = Math.round(+el.value) || 0;
+  if (!v) v = S.hotkeys.bindings[i].step || 2;
+  v = Math.max(-10, Math.min(10, v));
+  S.hotkeys.bindings[i].step = v;
+  el.value = v;
+}
+function addHk(){
+  S.hotkeys.bindings.push({keys: '', target: 'system', step: 2});
+  renderHk();
+}
+function removeHk(i){ S.hotkeys.bindings.splice(i, 1); renderHk(); }
+
+// ---- state in / state out ----
+async function refresh(profile){
+  const s = await pywebview.api.get_state(profile || null);
+  S = s;
   recommended = s.recommended;
-  document.getElementById('reclink').textContent =
-    `Use recommended settings (${s.recommended}%)`;
-  const mic = document.getElementById('mic');
-  mic.innerHTML = s.devices.map(d =>
-    `<option${d === s.deviceName ? ' selected' : ''}>${d.replace(/</g,'&lt;')}</option>`).join('');
-  vol.value = s.volume;
-  hear.checked = false;  // hear-yourself never survives a close/reopen
+  document.getElementById('ver').textContent = 'v' + s.version;
+  document.getElementById('reclink').textContent = `Use recommended (${s.recommended}%)`;
+  document.getElementById('profsel').innerHTML = s.profiles.map(p =>
+    `<option value="${esc(p)}"${p === s.active ? ' selected' : ''}>${esc(p)}</option>`).join('');
+  document.getElementById('delprof').disabled = s.profiles.length <= 1;
+  profileCancel();
+  if (hear.checked) pywebview.api.set_monitor(null, false);
+  hear.checked = false;  // hear-yourself never survives a close/reopen/switch
+  lastTargetId = null;
+  renderList('out');
+  renderList('mic');
+  renderHk();
   document.getElementById('sw_enforce').checked = s.enforce;
   document.getElementById('sw_startup').checked = s.runAtStartup;
   document.getElementById('sw_updates').checked = s.checkUpdates;
+  document.getElementById('sw_fallback').checked = s.notifyFallback;
   setMeter(0);
-  paint();
 }
-window.addEventListener('pywebviewready', refresh);
+window.addEventListener('pywebviewready', () => refresh());
 function save(){
+  const strip = l => l.map(d => { const c = {...d}; delete c.connected; return c; });
   pywebview.api.save({
-    deviceName: document.getElementById('mic').value,
-    volume: +vol.value,
+    active: document.getElementById('profsel').value,
+    mics: strip(S.mics),
+    outputs: strip(S.outputs),
+    hotkeys: {enabled: document.getElementById('sw_hotkeys').checked,
+              bindings: S.hotkeys.bindings},
     enforce: document.getElementById('sw_enforce').checked,
     runAtStartup: document.getElementById('sw_startup').checked,
     checkUpdates: document.getElementById('sw_updates').checked,
+    notifyFallback: document.getElementById('sw_fallback').checked,
   });
 }
 </script></body></html>"""
 
 MENU_W, MENU_H = 248, 356
-SET_W, SET_H = 442, 682
+SET_W, SET_H = 442, 760
 
 MENU_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><style>
@@ -1166,78 +1472,131 @@ class App:
         app = self
 
         class Api:
-            def get_state(self_api):
+            def get_state(self_api, profile=None):
+                """Full settings state for one profile (default: the active
+                one). The JS working copy starts from this and only comes
+                back through save()."""
+                _co_initialize()  # js_api calls arrive on webview worker threads
+                profiles = app.cfg["profiles"]
+                sel = next((p for p in profiles if p.get("name") == profile), None) \
+                    or next((p for p in profiles
+                             if p.get("name") == app.cfg.get("active_profile")),
+                            profiles[0])
+                all_mics, all_outputs = [], []
                 try:
-                    import comtypes
-                    comtypes.CoInitialize()  # js_api calls arrive on webview worker threads
-                except Exception:
-                    pass
-                try:
-                    devices = [n for _, n in list_capture_devices()]
+                    all_mics = list_devices(EDataFlow.eCapture.value)
+                    all_outputs = list_devices(EDataFlow.eRender.value)
                 except Exception as e:
                     log.warning("device enumeration for settings failed: %s", e)
-                    devices = []
-                # scaffolding until Task 6: settings UI edits the active
-                # profile's FIRST mic entry only
-                mics, _ = active_profile_lists(app.cfg)
-                mic0 = mics[0] if mics else {}
+                mic_ids = {i for i, _ in all_mics}
+                out_ids = {i for i, _ in all_outputs}
+
+                def tagged(entries, ids):
+                    # transient `connected` flag drives the "(not connected)"
+                    # marker + meter/monitor targeting; save() strips it
+                    return [dict(e, connected=e.get("id") in ids) for e in entries]
+
+                hk = app.cfg.get("hotkeys") or {}
                 return {
-                    "devices": devices,
-                    "deviceName": mic0.get("name") or "",
-                    "volume": int(mic0.get("volume", RECOMMENDED_VOLUME)),
+                    "profiles": [p["name"] for p in profiles],
+                    "active": sel["name"],
+                    "mics": tagged(sel.get("mics", []), mic_ids),
+                    "outputs": tagged(sel.get("outputs", []), out_ids),
+                    "all_mics": [[i, n] for i, n in all_mics],
+                    "all_outputs": [[i, n] for i, n in all_outputs],
+                    "hotkeys": {"enabled": bool(hk.get("enabled")),
+                                "bindings": hk.get("bindings") or []},
                     "enforce": bool(app.cfg["enforce"]),
                     "runAtStartup": bool(app.cfg["run_at_startup"]),
                     "checkUpdates": bool(app.cfg["check_updates"]),
+                    "notifyFallback": bool(app.cfg["notify_fallback"]),
                     "version": VERSION,
                     "recommended": RECOMMENDED_VOLUME,
+                    "sessions": _session_names(),
                 }
 
-            def mic_changed(self_api, name):
-                """Dropdown swap: point the level bar (and a running monitor)
-                at the new mic and hand back ITS current volume to adopt."""
-                try:
-                    import comtypes
-                    comtypes.CoInitialize()
-                except Exception:
-                    pass
-                try:
-                    for dev_id, dev_name in list_capture_devices():
-                        if dev_name == name:
-                            app._meter_device_id = dev_id
-                            if app._monitor is not None:
-                                app._set_monitor(dev_id, True)
-                            vol = get_endpoint_volume(dev_id).GetMasterVolumeLevelScalar()
-                            return {"volume": round(vol * 100)}
-                except Exception as e:
-                    log.warning("mic-change volume lookup failed: %s", e)
-                return {"volume": None}
+            def new_profile(self_api, name, source=None):
+                """Create a profile as a deep copy of `source` (default: the
+                active profile) and make it active. Persisted immediately —
+                profile management is structural, not Save-gated."""
+                name = str(name or "").strip()
+                err = _profile_name_error(app.cfg, name)
+                if err:
+                    return {"ok": False, "error": err}
+                profiles = app.cfg["profiles"]
+                src = next((p for p in profiles if p.get("name") == source), None) \
+                    or next((p for p in profiles
+                             if p.get("name") == app.cfg.get("active_profile")),
+                            profiles[0])
+                copy = json.loads(json.dumps(src))
+                copy["name"] = name
+                profiles.append(copy)
+                app.cfg["active_profile"] = name
+                save_config(app.cfg)
+                log.info("profile created: %s (copy of %s)", name, src.get("name"))
+                return {"ok": True, "active": name}
 
-            def set_monitor(self_api, name, on):
+            def rename_profile(self_api, old, new):
+                new = str(new or "").strip()
+                err = _profile_name_error(app.cfg, new, current=old)
+                if err:
+                    return {"ok": False, "error": err}
+                prof = next((p for p in app.cfg["profiles"]
+                             if p.get("name") == old), None)
+                if prof is None:
+                    return {"ok": False, "error": "Profile not found"}
+                prof["name"] = new
+                if app.cfg.get("active_profile") == old:
+                    app.cfg["active_profile"] = new
+                save_config(app.cfg)
+                log.info("profile renamed: %s -> %s", old, new)
+                return {"ok": True, "active": app.cfg["active_profile"]}
+
+            def delete_profile(self_api, name):
+                profiles = app.cfg["profiles"]
+                if len(profiles) <= 1:
+                    return {"ok": False, "error": "Cannot delete the last profile"}
+                prof = next((p for p in profiles if p.get("name") == name), None)
+                if prof is None:
+                    return {"ok": False, "error": "Profile not found"}
+                profiles.remove(prof)
+                if app.cfg.get("active_profile") == name:
+                    app.cfg["active_profile"] = profiles[0]["name"]
+                    app.enforcer._set_once_done.clear()
+                    app.enforcer.reattach()
+                    app.enforcer.poke()
+                save_config(app.cfg)
+                log.info("profile deleted: %s", name)
+                return {"ok": True, "active": app.cfg["active_profile"]}
+
+            def device_volume(self_api, device_id):
+                """Current volume % of a device — prefills a newly added row
+                (the v1.4 adoption rule: guard it where it already sits)."""
+                _co_initialize()
                 try:
-                    import comtypes
-                    comtypes.CoInitialize()
-                except Exception:
-                    pass
-                dev_id = app._meter_device_id
-                try:
-                    for d_id, d_name in list_capture_devices():
-                        if d_name == name:
-                            dev_id = d_id
-                            break
-                except Exception:
-                    pass
-                return app._set_monitor(dev_id, bool(on))
+                    vol = get_endpoint_volume(device_id).GetMasterVolumeLevelScalar()
+                    return round(vol * 100)
+                except Exception as e:
+                    log.warning("device volume lookup failed: %s", e)
+                    return RECOMMENDED_VOLUME
+
+            def meter_device(self_api, device_id):
+                """JS points the level bar at the first connected mic of its
+                working copy whenever the mic list changes."""
+                app._meter_device_id = device_id or None
+
+            def set_monitor(self_api, device_id, on):
+                _co_initialize()
+                if device_id:
+                    app._meter_device_id = device_id
+                return app._set_monitor(device_id, bool(on))
 
             def preview_volume(self_api, volume):
                 """Live volume while hearing yourself — applied to the device
                 immediately; the Enforcer holds off until the monitor stops."""
                 if app._monitor is None or not app._meter_device_id:
                     return
-                try:
-                    import comtypes
-                    comtypes.CoInitialize()
-                except Exception:
-                    pass
+                _co_initialize()
                 try:
                     level = max(0.0, min(1.0, int(volume) / 100.0))
                     get_endpoint_volume(app._meter_device_id).SetMasterVolumeLevelScalar(level, None)
@@ -1245,42 +1604,65 @@ class App:
                     log.warning("volume preview failed: %s", e)
 
             def save(self_api, state):
-                try:
-                    import comtypes
-                    comtypes.CoInitialize()
-                except Exception:
-                    pass
-                # scaffolding until Task 6: write into the active profile's
-                # first mic entry (created if the list is empty)
-                mics, _ = active_profile_lists(app.cfg)
-                if not mics:
-                    prof = next((p for p in app.cfg["profiles"]
-                                 if p.get("name") == app.cfg.get("active_profile")),
-                                app.cfg["profiles"][0])
-                    mics = prof.setdefault("mics", [])
-                    mics.append({"id": None, "name": "",
-                                 "volume": RECOMMENDED_VOLUME})
-                entry = mics[0]
-                try:
-                    for dev_id, dev_name in list_capture_devices():
-                        if dev_name == state.get("deviceName"):
-                            entry["id"] = dev_id
-                            entry["name"] = dev_name
-                            break
-                except Exception as e:
-                    log.warning("device lookup on save failed: %s", e)
-                entry["volume"] = int(state.get("volume",
-                                                entry.get("volume", RECOMMENDED_VOLUME)))
+                """Persist the SELECTED profile's lists + hotkeys + switches
+                and make that profile active."""
+                _co_initialize()
+                profiles = app.cfg["profiles"]
+                prof = next((p for p in profiles
+                             if p.get("name") == state.get("active")), profiles[0])
+
+                def clean(entries, is_output):
+                    out = []
+                    for e in entries or []:
+                        if not e.get("id"):
+                            continue
+                        try:
+                            volume = max(0, min(100, int(e.get("volume",
+                                                              RECOMMENDED_VOLUME))))
+                        except (TypeError, ValueError):
+                            volume = RECOMMENDED_VOLUME
+                        item = {"id": str(e["id"]),
+                                "name": str(e.get("name") or ""),
+                                "volume": volume}
+                        if is_output:
+                            item["hold_volume"] = bool(e.get("hold_volume"))
+                        out.append(item)  # transient `connected` key dropped
+                    return out
+
+                prof["mics"] = clean(state.get("mics"), False)
+                prof["outputs"] = clean(state.get("outputs"), True)
+                hk = state.get("hotkeys") or {}
+                bindings = []
+                for b in hk.get("bindings") or []:
+                    keys = str(b.get("keys") or "").strip()
+                    if not keys:
+                        continue  # unfinished capture rows are dropped
+                    try:
+                        step = int(b.get("step", 2))
+                    except (TypeError, ValueError):
+                        step = 2
+                    step = max(-10, min(10, step)) or 2
+                    bindings.append({"keys": keys,
+                                     "target": str(b.get("target") or "system"),
+                                     "step": step})
+                app.cfg["hotkeys"] = {"enabled": bool(hk.get("enabled")),
+                                      "bindings": bindings}
+                app.cfg["active_profile"] = prof["name"]
                 app.cfg["enforce"] = bool(state.get("enforce"))
                 app.cfg["run_at_startup"] = bool(state.get("runAtStartup"))
                 app.cfg["check_updates"] = bool(state.get("checkUpdates"))
+                app.cfg["notify_fallback"] = bool(state.get("notifyFallback"))
                 save_config(app.cfg)
                 try:
                     set_run_at_startup(app.cfg["run_at_startup"])
                 except OSError as e:
                     log.warning("startup registry update failed: %s", e)
+                app.enforcer._set_once_done.clear()  # volumes may have changed
                 app.enforcer.reattach()
                 app.enforcer.poke()
+                restart_hotkeys = getattr(app, "_restart_hotkeys", None)  # wired by the hotkey engine task
+                if callable(restart_hotkeys):
+                    restart_hotkeys()
                 if app.icon:
                     app.icon.update_menu()
                 self_api.cancel()
