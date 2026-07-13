@@ -710,6 +710,7 @@ hr{border:none;border-top:1px solid #27272a;margin:5px 4px}
 <div class="item" onclick="pywebview.api.settings()"><span>Settings&hellip;</span></div>
 <div class="item" onclick="pywebview.api.reapply()"><span>Re-apply now</span></div>
 <hr>
+<div id="profiles"></div>
 <div class="item" onclick="pywebview.api.updates()"><span>Check for updates</span></div>
 <div class="item" onclick="pywebview.api.uninstall()"><span>Uninstall&hellip;</span></div>
 <hr>
@@ -720,6 +721,13 @@ async function refreshMenu(){
   document.getElementById('ver').textContent = 'v' + s.version;
   document.getElementById('status').textContent = s.status;
   document.getElementById('sw').classList.toggle('on', s.enforce);
+  const box = document.getElementById('profiles');
+  box.innerHTML = s.profiles.length > 1 ? '<hr>' + s.profiles.map(p =>
+    `<div class="item" onclick="pywebview.api.set_profile(${JSON.stringify(p)})">
+       <span>${p.replace(/</g,'&lt;')}</span>
+       ${p === s.active ? '<span style="color:#22c55e">&#9679;</span>' : ''}
+     </div>`).join('') : '';
+  window._menuH = document.body.scrollHeight + 2;
 }
 window.addEventListener('pywebviewready', refreshMenu);
 window.addEventListener('blur', () => pywebview.api.hide_menu());
@@ -1412,10 +1420,24 @@ class App:
         class Api:
             def get_state(self_api):
                 return {"version": VERSION, "status": app._status_text(),
-                        "enforce": bool(app.cfg["enforce"])}
+                        "enforce": bool(app.cfg["enforce"]),
+                        "profiles": [p["name"] for p in app.cfg["profiles"]],
+                        "active": app.cfg["active_profile"]}
 
             def toggle_enforce(self_api):
                 app._toggle_enforce(None, None)
+                try:
+                    app._menu_win.evaluate_js("refreshMenu()")
+                except Exception:
+                    pass
+
+            def set_profile(self_api, name):
+                if any(p["name"] == name for p in app.cfg["profiles"]):
+                    app.cfg["active_profile"] = name
+                    save_config(app.cfg)
+                    app.enforcer._set_once_done.clear()
+                    app.enforcer.reattach()
+                    app.enforcer.poke()
                 try:
                     app._menu_win.evaluate_js("refreshMenu()")
                 except Exception:
@@ -1481,6 +1503,13 @@ class App:
             u = ctypes.windll.user32
             pt = ctypes.wintypes.POINT()
             u.GetCursorPos(ctypes.byref(pt))
+            self._menu_win.evaluate_js(
+                "typeof refreshMenu === 'function' && refreshMenu()")
+            try:
+                menu_h = self._menu_win.evaluate_js("window._menuH") or MENU_H
+                self._menu_win.resize(MENU_W, int(menu_h))
+            except Exception as e:
+                log.warning("menu resize failed: %s", e)
             hwnd = self._menu_hwnd()
             rect = ctypes.wintypes.RECT()
             w, h = MENU_W, MENU_H
@@ -1492,7 +1521,6 @@ class App:
             y = pt.y - h
             if y < 8:
                 y = pt.y
-            self._menu_win.evaluate_js("typeof refreshMenu === 'function' && refreshMenu()")
             self._menu_shown_at = time.monotonic()
             self._menu_win.move(x, y)
             self._menu_win.show()
