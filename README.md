@@ -4,7 +4,7 @@
 
 # MicGuard
 
-**Your mic. Your volume. Locked.**
+**Keeps your default mic and its volume exactly where you set them.**
 
 Windows (and games like **Black Ops 3**) love to silently change your default
 microphone and its recording volume. MicGuard sits in your tray and snaps both
