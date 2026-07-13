@@ -15,4 +15,5 @@ dependencies = [
 dev = [
     "pygetwindow>=0.0.9",
     "pyinstaller>=6.10",
+    "pytest>=9.1.1",
 ]
