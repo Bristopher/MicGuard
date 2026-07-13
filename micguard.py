@@ -30,6 +30,7 @@ LOG_PATH = os.path.join(CONFIG_DIR, "micguard.log")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 WATCHDOG_SECONDS = 15  # safety net; real work is event-driven
 VOLUME_EPSILON = 0.005
+RECOMMENDED_VOLUME = 85  # the AT2020 sweet spot — "Use recommended" in settings
 
 # UI: all windows are frameless pywebview (WebView2) windows styled by the
 # shadcn/zinc CSS tokens inside SETTINGS_HTML / DIALOG_HTML below. Green
@@ -142,6 +143,137 @@ def get_endpoint_volume(device_id: str):
     imm = enumerator.GetDevice(device_id)
     interface = imm.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
+
+
+def get_endpoint_meter(device_id: str):
+    """IAudioMeterInformation — drives the settings window's live level bar."""
+    from pycaw.api.endpointvolume import IAudioMeterInformation
+    enumerator = AudioUtilities.GetDeviceEnumerator()
+    imm = enumerator.GetDevice(device_id)
+    interface = imm.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
+    return cast(interface, POINTER(IAudioMeterInformation))
+
+
+# ---- "hear yourself" passthrough (WASAPI shared-mode capture → render) ----
+# pycaw ships IAudioClient but not the capture/render service interfaces;
+# declared here like IPolicyConfig rather than adding an audio-IO dependency.
+
+class IAudioCaptureClient(IUnknown):
+    _iid_ = GUID("{C8ADBD64-E71E-48a0-A4DE-185C395CD317}")
+    _methods_ = (
+        COMMETHOD([], HRESULT, "GetBuffer",
+                  (["out"], POINTER(POINTER(ctypes.c_byte)), "ppData"),
+                  (["out"], POINTER(ctypes.c_uint32), "pNumFramesToRead"),
+                  (["out"], POINTER(ctypes.c_ulong), "pdwFlags"),
+                  (["out"], POINTER(ctypes.c_uint64), "pu64DevicePosition"),
+                  (["out"], POINTER(ctypes.c_uint64), "pu64QPCPosition")),
+        COMMETHOD([], HRESULT, "ReleaseBuffer",
+                  (["in"], ctypes.c_uint32, "NumFramesRead")),
+        COMMETHOD([], HRESULT, "GetNextPacketSize",
+                  (["out"], POINTER(ctypes.c_uint32), "pNumFramesInNextPacket")),
+    )
+
+
+class IAudioRenderClient(IUnknown):
+    _iid_ = GUID("{F294ACFC-3146-4483-A7BF-ADDCA7C260E2}")
+    _methods_ = (
+        COMMETHOD([], HRESULT, "GetBuffer",
+                  (["in"], ctypes.c_uint32, "NumFramesRequested"),
+                  (["out"], POINTER(POINTER(ctypes.c_byte)), "ppData")),
+        COMMETHOD([], HRESULT, "ReleaseBuffer",
+                  (["in"], ctypes.c_uint32, "NumFramesWritten"),
+                  (["in"], ctypes.c_ulong, "dwFlags")),
+    )
+
+
+AUDCLNT_SHAREMODE_SHARED = 0
+AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM = 0x80000000
+AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY = 0x08000000
+AUDCLNT_BUFFERFLAGS_SILENT = 0x2
+
+
+class MicMonitor(threading.Thread):
+    """"Hear yourself": plays the mic through the default speakers while the
+    settings window is open. Entirely in-app — it never touches Windows' own
+    'Listen to this device' checkbox, so stopping it can never clobber a
+    listen the user enabled outside MicGuard."""
+
+    def __init__(self, device_id: str):
+        super().__init__(daemon=True, name="micmonitor")
+        self.device_id = device_id
+        # NOT "_stop" — that would shadow threading.Thread._stop() and break
+        # join()/is_alive() with "'Event' object is not callable"
+        self._stop_evt = threading.Event()
+
+    def stop(self):
+        self._stop_evt.set()
+
+    def run(self):
+        import gc
+        import comtypes
+        from pycaw.api.audioclient import IAudioClient
+        comtypes.CoInitialize()
+        cap_client = ren_client = capture = render = None
+        fmt = mic = spk = enumerator = None
+        try:
+            enumerator = AudioUtilities.GetDeviceEnumerator()
+            mic = enumerator.GetDevice(self.device_id)
+            spk = enumerator.GetDefaultAudioEndpoint(
+                EDataFlow.eRender.value, ERole.eMultimedia.value)
+            cap_client = cast(mic.Activate(IAudioClient._iid_, CLSCTX_ALL, None),
+                              POINTER(IAudioClient))
+            ren_client = cast(spk.Activate(IAudioClient._iid_, CLSCTX_ALL, None),
+                              POINTER(IAudioClient))
+            # one format for both sides (the speakers' mix format); the
+            # AUTOCONVERT flags make WASAPI resample the mic side to match
+            fmt = ren_client.GetMixFormat()
+            flags = (AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                     | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY)
+            duration = 1_000_000  # 100 ms buffers (REFERENCE_TIME units)
+            cap_client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, duration, 0, fmt, None)
+            ren_client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, duration, 0, fmt, None)
+            capture = cast(cap_client.GetService(IAudioCaptureClient._iid_),
+                           POINTER(IAudioCaptureClient))
+            render = cast(ren_client.GetService(IAudioRenderClient._iid_),
+                          POINTER(IAudioRenderClient))
+            block = fmt.contents.nBlockAlign
+            buffer_frames = ren_client.GetBufferSize()
+            cap_client.Start()
+            ren_client.Start()
+            log.info("hear-yourself monitor started")
+            while not self._stop_evt.is_set():
+                if not capture.GetNextPacketSize():
+                    time.sleep(0.005)
+                    continue
+                data, frames, cflags, _, _ = capture.GetBuffer()
+                try:
+                    room = buffer_frames - ren_client.GetCurrentPadding()
+                    n = min(frames, room)
+                    if n > 0:
+                        out = render.GetBuffer(n)
+                        if cflags & AUDCLNT_BUFFERFLAGS_SILENT:
+                            ctypes.memset(out, 0, n * block)
+                        else:
+                            ctypes.memmove(out, data, n * block)
+                        render.ReleaseBuffer(n, 0)
+                finally:
+                    capture.ReleaseBuffer(frames)
+        except Exception as e:
+            log.warning("hear-yourself monitor failed: %s", e)
+        finally:
+            for client in (cap_client, ren_client):
+                try:
+                    if client is not None:
+                        client.Stop()
+                except Exception:
+                    pass
+            # release every COM pointer on THIS thread before CoUninitialize —
+            # a GC-timed Release afterwards is an access-violation crash
+            cap_client = ren_client = capture = render = None
+            fmt = mic = spk = enumerator = None
+            gc.collect()
+            comtypes.CoUninitialize()
+            log.info("hear-yourself monitor stopped")
 
 
 # --------------------------------------------------------------------------
@@ -377,6 +509,13 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .gh{margin-right:auto;align-self:center;color:#71717a;font-size:12.5px;
     text-decoration:none;cursor:pointer}
 .gh:hover{color:#fafafa;text-decoration:underline}
+.meter{height:5px;background:#18181b;border:1px solid #27272a;border-radius:999px;
+       margin-top:10px;overflow:hidden}
+#meterfill{height:100%;width:0%;background:#22c55e;border-radius:999px;
+       transition:width .06s linear}
+.recrow{display:flex;justify-content:flex-end;margin-top:2px}
+.rec{color:#71717a;font-size:12px;text-decoration:none;cursor:pointer}
+.rec:hover{color:#fafafa;text-decoration:underline}
 </style></head><body>
 <div class="header pywebview-drag-region">
   <h1>MicGuard</h1><span class="ver" id="ver"></span>
@@ -385,9 +524,17 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 <p class="sub">Keeps your mic and its volume exactly where you set them</p>
 <label for="mic">Microphone to guard</label>
 <div class="select-wrap"><select id="mic"></select></div>
+<div class="meter"><div id="meterfill"></div></div>
 <div class="vol-row"><label>Volume to hold</label>
   <span class="volwrap"><input id="volv" inputmode="numeric" maxlength="3"><span class="pct">%</span></span></div>
 <input type="range" id="vol" min="0" max="100" value="85">
+<div class="recrow"><a class="rec" href="javascript:void(0)" onclick="useRecommended()"
+  id="reclink">Use recommended settings</a></div>
+<div class="switchrow">
+  <div><div class="lab">Hear yourself</div>
+       <div class="hint">Plays this mic through your speakers while you adjust &mdash; off when settings closes</div></div>
+  <label class="switch"><input type="checkbox" id="sw_hear"><span class="knob"></span></label>
+</div>
 <hr>
 <div class="switchrow">
   <div><div class="lab">Enforce mic + volume</div>
@@ -411,32 +558,59 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 </div>
 <script>
 const vol = document.getElementById('vol'), volv = document.getElementById('volv');
+const hear = document.getElementById('sw_hear');
+let recommended = 85;
 function paint(){
   if (document.activeElement !== volv) volv.value = vol.value;
   vol.style.background = `linear-gradient(to right,#22c55e ${vol.value}%,#27272a ${vol.value}%)`;
 }
-vol.addEventListener('input', paint);
+// while hearing yourself, volume changes apply to the mic instantly
+function preview(){ if (hear.checked) pywebview.api.preview_volume(+vol.value); }
+vol.addEventListener('input', () => { paint(); preview(); });
 // the number is editable: digits only, clamped 0-100, live-syncs the slider
 volv.addEventListener('input', () => {
   volv.value = volv.value.replace(/[^0-9]/g, '');
   if (volv.value !== '') {
     vol.value = Math.min(100, +volv.value);
     vol.style.background = `linear-gradient(to right,#22c55e ${vol.value}%,#27272a ${vol.value}%)`;
+    preview();
   }
 });
 volv.addEventListener('blur', () => { volv.value = vol.value; });
 volv.addEventListener('keydown', e => { if (e.key === 'Enter') volv.blur(); });
 volv.addEventListener('focus', () => volv.select());
+function setMeter(p){
+  // sqrt = perceptual scaling so quiet speech still moves the bar
+  document.getElementById('meterfill').style.width =
+    Math.min(100, Math.round(Math.sqrt(p) * 100)) + '%';
+}
+function useRecommended(){ vol.value = recommended; paint(); preview(); }
+// swapping mics: guard the new mic by default and adopt ITS current volume
+document.getElementById('mic').addEventListener('change', async () => {
+  const r = await pywebview.api.mic_changed(document.getElementById('mic').value);
+  if (r && r.volume !== null && r.volume !== undefined) { vol.value = r.volume; paint(); }
+  document.getElementById('sw_enforce').checked = true;
+});
+hear.addEventListener('change', async () => {
+  const on = await pywebview.api.set_monitor(document.getElementById('mic').value, hear.checked);
+  hear.checked = on;
+  if (!on) preview();  // monitor off — nothing left holding the live volume
+});
 async function refresh(){
   const s = await pywebview.api.get_state();
   document.getElementById('ver').textContent = 'v' + s.version;
+  recommended = s.recommended;
+  document.getElementById('reclink').textContent =
+    `Use recommended settings (${s.recommended}%)`;
   const mic = document.getElementById('mic');
   mic.innerHTML = s.devices.map(d =>
     `<option${d === s.deviceName ? ' selected' : ''}>${d.replace(/</g,'&lt;')}</option>`).join('');
   vol.value = s.volume;
+  hear.checked = false;  // hear-yourself never survives a close/reopen
   document.getElementById('sw_enforce').checked = s.enforce;
   document.getElementById('sw_startup').checked = s.runAtStartup;
   document.getElementById('sw_updates').checked = s.checkUpdates;
+  setMeter(0);
   paint();
 }
 window.addEventListener('pywebviewready', refresh);
@@ -452,6 +626,7 @@ function save(){
 </script></body></html>"""
 
 MENU_W, MENU_H = 248, 356
+SET_W, SET_H = 442, 682
 
 MENU_HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><style>
@@ -528,12 +703,16 @@ class Enforcer(threading.Thread):
         super().__init__(daemon=True, name="enforcer")
         self.app = app
         self.wake: queue.Queue = queue.Queue()
-        self._stop = threading.Event()
+        # NOT "_stop" — see MicMonitor: shadowing Thread._stop() breaks join()
+        self._stop_evt = threading.Event()
         self._volume_com = None
         self._volume_cb = None
+        # True while the settings preview ("hear yourself") is adjusting the
+        # volume live — device enforcement continues, volume snap-back waits
+        self.hold_volume = False
 
     def stop(self):
-        self._stop.set()
+        self._stop_evt.set()
         self.wake.put("stop")
 
     def poke(self):
@@ -548,12 +727,12 @@ class Enforcer(threading.Thread):
             enumerator.RegisterEndpointNotificationCallback(device_cb)
             self._attach_volume_listener()
             self._enforce()
-            while not self._stop.is_set():
+            while not self._stop_evt.is_set():
                 try:
                     self.wake.get(timeout=WATCHDOG_SECONDS)
                 except queue.Empty:
                     pass
-                if self._stop.is_set():
+                if self._stop_evt.is_set():
                     break
                 # drain burst of events into one pass
                 try:
@@ -599,6 +778,8 @@ class Enforcer(threading.Thread):
                     break
             if self._volume_com is None:
                 self._attach_volume_listener()
+            if self.hold_volume:
+                return
             if self._volume_com is not None:
                 target = max(0.0, min(1.0, cfg["volume"] / 100.0))
                 try:
@@ -643,6 +824,10 @@ class App:
         self.icon = None
         self._settings_win = None
         self._menu_win = None
+        self._menu_shown_at = 0.0
+        self._monitor = None            # MicMonitor while "hear yourself" is on
+        self._meter_stop = None         # Event stopping the level-bar pump
+        self._meter_device_id = self.cfg.get("device_id")
 
     # ---- tray ----
 
@@ -704,6 +889,8 @@ class App:
                               background_color="#09090b")
         # settings + tray menu pre-created hidden so opening them is instant
         self._make_settings_window(hidden=not self.first_run)
+        if self.first_run:
+            self._start_meter()
         self._make_menu_window(hidden=True)
         webview.start()
         # every window destroyed -> we are quitting
@@ -861,7 +1048,60 @@ class App:
                     "runAtStartup": bool(app.cfg["run_at_startup"]),
                     "checkUpdates": bool(app.cfg["check_updates"]),
                     "version": VERSION,
+                    "recommended": RECOMMENDED_VOLUME,
                 }
+
+            def mic_changed(self_api, name):
+                """Dropdown swap: point the level bar (and a running monitor)
+                at the new mic and hand back ITS current volume to adopt."""
+                try:
+                    import comtypes
+                    comtypes.CoInitialize()
+                except Exception:
+                    pass
+                try:
+                    for dev_id, dev_name in list_capture_devices():
+                        if dev_name == name:
+                            app._meter_device_id = dev_id
+                            if app._monitor is not None:
+                                app._set_monitor(dev_id, True)
+                            vol = get_endpoint_volume(dev_id).GetMasterVolumeLevelScalar()
+                            return {"volume": round(vol * 100)}
+                except Exception as e:
+                    log.warning("mic-change volume lookup failed: %s", e)
+                return {"volume": None}
+
+            def set_monitor(self_api, name, on):
+                try:
+                    import comtypes
+                    comtypes.CoInitialize()
+                except Exception:
+                    pass
+                dev_id = app._meter_device_id
+                try:
+                    for d_id, d_name in list_capture_devices():
+                        if d_name == name:
+                            dev_id = d_id
+                            break
+                except Exception:
+                    pass
+                return app._set_monitor(dev_id, bool(on))
+
+            def preview_volume(self_api, volume):
+                """Live volume while hearing yourself — applied to the device
+                immediately; the Enforcer holds off until the monitor stops."""
+                if app._monitor is None or not app._meter_device_id:
+                    return
+                try:
+                    import comtypes
+                    comtypes.CoInitialize()
+                except Exception:
+                    pass
+                try:
+                    level = max(0.0, min(1.0, int(volume) / 100.0))
+                    get_endpoint_volume(app._meter_device_id).SetMasterVolumeLevelScalar(level, None)
+                except Exception as e:
+                    log.warning("volume preview failed: %s", e)
 
             def save(self_api, state):
                 try:
@@ -896,6 +1136,7 @@ class App:
                 webbrowser.open(f"https://github.com/{GITHUB_REPO}")
 
             def cancel(self_api):
+                app._settings_closing()
                 win = app._settings_win
                 if win:
                     try:
@@ -905,7 +1146,7 @@ class App:
 
         self._settings_win = webview.create_window(
             f"{APP_NAME} Settings", html=SETTINGS_HTML, js_api=Api(),
-            width=442, height=568, frameless=True, on_top=True,
+            width=SET_W, height=SET_H, frameless=True, on_top=True,
             resizable=False, hidden=hidden, background_color="#09090b")
         # Alt+F4 etc. can still destroy it; recreate lazily on next open
         self._settings_win.events.closed += lambda: setattr(self, "_settings_win", None)
@@ -916,22 +1157,99 @@ class App:
         import webview
         try:
             screen = webview.screens[0]
-            self._settings_win.move((screen.width - 442) // 2,
-                                    (screen.height - 568) // 2)
+            self._settings_win.move((screen.width - SET_W) // 2,
+                                    (screen.height - SET_H) // 2)
         except Exception:
             pass
 
     def open_settings(self):
         if self._settings_win is None:
             self._make_settings_window(hidden=False)
+            self._start_meter()
             return
         try:
             self._settings_win.evaluate_js("typeof refresh === 'function' && refresh()")
             self._center_settings()
             self._settings_win.show()
+            self._start_meter()
         except Exception:
             self._settings_win = None
             self._make_settings_window(hidden=False)
+            self._start_meter()
+
+    # ---- settings live extras: level meter + "hear yourself" monitor ----
+    # Both run ONLY while the settings window is visible — this is UI feedback
+    # scoped to an open window, not a new enforcement polling loop.
+
+    def _settings_closing(self):
+        """Anything live the settings window started stops with it. The
+        monitor is always app-started, so stopping it here can never turn
+        off a 'Listen to this device' the user enabled in Windows."""
+        self._set_monitor(None, False)
+        self._stop_meter()
+        self._meter_device_id = self.cfg.get("device_id")
+
+    def _set_monitor(self, device_id, on) -> bool:
+        if self._monitor is not None:
+            self._monitor.stop()
+            self._monitor = None
+        if on and device_id:
+            self._monitor = MicMonitor(device_id)
+            self._monitor.start()
+        self.enforcer.hold_volume = self._monitor is not None
+        if self._monitor is None:
+            self.enforcer.poke()  # snap any previewed volume back to the target
+        return self._monitor is not None
+
+    def _start_meter(self):
+        self._stop_meter()
+        self._meter_device_id = self.cfg.get("device_id")
+        stop = threading.Event()
+        self._meter_stop = stop
+        win = self._settings_win
+
+        def pump():
+            import comtypes
+            comtypes.CoInitialize()
+            meter = None
+            meter_dev = None
+            misses = 0
+            try:
+                while not stop.is_set() and misses < 40:
+                    dev = self._meter_device_id
+                    if meter is None or dev != meter_dev:
+                        meter_dev = dev
+                        try:
+                            meter = get_endpoint_meter(dev) if dev else None
+                        except Exception:
+                            meter = None
+                    peak = 0.0
+                    if meter is not None:
+                        try:
+                            peak = meter.GetPeakValue()
+                        except Exception:
+                            meter = None
+                    try:
+                        win.evaluate_js(
+                            f"typeof setMeter === 'function' && setMeter({peak:.4f})")
+                        misses = 0
+                    except Exception:
+                        misses += 1  # window mid-load or destroyed; give up after ~2 s
+                    stop.wait(0.05)
+            finally:
+                # drop the meter pointer on this thread before CoUninitialize
+                # (GC-timed Release afterwards = access violation)
+                meter = None
+                import gc
+                gc.collect()
+                comtypes.CoUninitialize()
+
+        threading.Thread(target=pump, daemon=True, name="micmeter").start()
+
+    def _stop_meter(self):
+        if self._meter_stop is not None:
+            self._meter_stop.set()
+            self._meter_stop = None
 
     # ---- tray menu (themed) ----
     # The native Win32 tray menu cannot be styled, so right-click opens this
@@ -977,7 +1295,7 @@ class App:
                 app._quit()
 
             def hide_menu(self_api):
-                app._hide_menu()
+                app._blur_menu()
 
         self._menu_win = webview.create_window(
             f"{APP_NAME} Menu", html=MENU_HTML, js_api=Api(),
@@ -992,23 +1310,51 @@ class App:
         except Exception:
             pass
 
+    def _menu_hwnd(self):
+        return ctypes.windll.user32.FindWindowW(None, f"{APP_NAME} Menu")
+
+    def _blur_menu(self):
+        # The taskbar reclaims foreground a beat after a tray click opens the
+        # menu; treating that first blur as "clicked away" made the menu flash
+        # and vanish. Inside the grace window, take focus back instead.
+        if time.monotonic() - self._menu_shown_at < 0.5:
+            hwnd = self._menu_hwnd()
+            if hwnd:
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+        else:
+            self._hide_menu()
+
     def open_menu(self):
         import webview
         if self._menu_win is None:
             self._make_menu_window(hidden=True)
         try:
             # anchor like a native tray menu: bottom-left corner at the cursor
-            # (menu grows up-right; flip when the cursor is near an edge)
+            # (menu grows up-right; flip when the cursor is near an edge).
+            # Frameless windows come out smaller than the requested size, so
+            # measure the real rect — same user32 space as GetCursorPos.
+            u = ctypes.windll.user32
             pt = ctypes.wintypes.POINT()
-            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            u.GetCursorPos(ctypes.byref(pt))
+            hwnd = self._menu_hwnd()
+            rect = ctypes.wintypes.RECT()
+            w, h = MENU_W, MENU_H
+            if hwnd and u.GetWindowRect(hwnd, ctypes.byref(rect)):
+                w = rect.right - rect.left or w
+                h = rect.bottom - rect.top or h
             screen = webview.screens[0]
-            x = max(8, min(pt.x, screen.width - MENU_W - 8))
-            y = pt.y - MENU_H - 4
+            x = max(8, min(pt.x, screen.width - w - 8))
+            y = pt.y - h
             if y < 8:
-                y = pt.y + 4
+                y = pt.y
             self._menu_win.evaluate_js("typeof refreshMenu === 'function' && refreshMenu()")
+            self._menu_shown_at = time.monotonic()
             self._menu_win.move(x, y)
             self._menu_win.show()
+            if hwnd:
+                u.SetForegroundWindow(hwnd)
+            # give the page real focus so a later click-away fires blur
+            self._menu_win.evaluate_js("window.focus()")
         except Exception as e:
             log.warning("themed tray menu failed: %s", e)
 

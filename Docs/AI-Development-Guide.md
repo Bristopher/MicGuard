@@ -163,6 +163,8 @@ unittest-style classes run by pytest (per Preferred-Stack), with a fake
 8. ❌ **Task Scheduler / services / HKLM for startup** → explicit product requirement: `HKCU\...\Run` only, no admin
 9. ❌ **Polling loops** — the old `.myArchive/` scripts polled `psutil.process_iter` every second; the whole point of the rewrite is event-driven. New "react to X" behavior = a callback that wakes the Enforcer (see System-Conventions)
 10. ❌ **Blocking the pystray thread** — tray menu handlers that do slow work (network, dialogs) spawn a thread, like every existing handler does
+11. ❌ **Letting the GC release COM pointers after `CoUninitialize`** → access-violation crash. Short-lived audio threads (MicMonitor, the settings meter pump) null every COM local + `gc.collect()` BEFORE `CoUninitialize` (bit us 2026-07-12 building hear-yourself)
+12. ❌ **Naming a Thread attribute `_stop`** → shadows `threading.Thread._stop()` and breaks `join()`/`is_alive()` with `'Event' object is not callable`. Stop events are named `_stop_evt`
 
 ## ✅ Checklist for New Features
 

@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-12 — seeded from the full repo history to date: §1 (v1.0.0 rewrite) + §2 (v1.1.0 consent-based update flow)
+**Updated:** 2026-07-12 — added §6 (v1.4.0: tray-menu flash/anchor fixes, live level meter, hear yourself, mic-swap volume adoption)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `v1.2.0` tag (2026-07-12), all commits reviewed on **2026-07-12** — the repo is one day old; everything shipped is in §1–§3 below. **Next sweep starts from the `v1.2.0` tag.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -62,6 +62,18 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 2. **Right-click the tray icon** — the themed menu should pop up exactly at your cursor, hide when you click elsewhere, and every row must work: Enforce toggle (switch flips in place), Settings, Re-apply now (toast), Check for updates, Uninstall (press **Keep it**), Quit — Quit last, it exits the app.
 3. **Tray menu judgment call**: the enforce switch toggles without closing the menu — right, or should it close?
 4. Check for updates from the menu → the "Up to date" toast; the *consent dialog* next release should appear dead-center of the screen.
+
+## 6. v1.4.0 — tray-menu flash/anchor fixes + live meter, hear yourself, mic-swap adoption (~5 min)
+
+**Shipped:** `v1.4.0` release commits on 2026-07-12 — fixes the two bugs you reported (menu appearing for ~100 ms then vanishing = the taskbar reclaiming foreground triggering the blur-to-close; menu corner ~43 px off the cursor = pywebview frameless windows being smaller than their requested size), plus three settings-window features: a live level bar under the mic dropdown, a "Hear yourself" switch (in-app WASAPI mic→speaker passthrough with live volume preview; enforcement holds off while it's on), and mic-swap behavior (choosing a different mic adopts THAT mic's current volume, keeps Enforce on, and a "Use recommended settings (85%)" link is always available). Also fixed en route: a COM-release-after-CoUninitialize access-violation crash and a `Thread._stop` shadowing bug.
+**Machine-verified:** menu bottom-left corner == cursor exact (0,0 offset); early blur (≤0.5 s) survives, later blur hides; meter bar pumps live peaks; mic_changed returns the device's real current volume; monitor thread starts/stops cleanly ×3, live preview moved the real device to 40% and snapped back after stop; settings screenshot; sabotage test restored 47%→85% with the app running.
+
+1. **The one item that can only be tested by you, right now:** your installed copy is v1.3.2 — Check for updates → accept → the app should blink and come back as v1.4.0 with **no "Failed to load Python DLL" error box**. This one action verifies both §5.1 (the rename-swap updater) and delivers everything below.
+2. **Right-click the tray icon** — menu pops with its bottom-left corner exactly at the cursor and STAYS (the flash bug); click elsewhere → it closes; near the screen edges it flips instead of clipping.
+3. **Live meter:** open Settings, talk — the bar under the mic dropdown should dance with your voice, and follow the dropdown selection if you pick another mic.
+4. **Hear yourself:** flip the switch, speak — you hear your mic through your speakers (small delay is normal for shared-mode WASAPI; judge if it's acceptable). Drag the volume slider while talking — loudness follows live, no snap-back fight. Close settings → playback stops, volume returns to the configured target. Judgment: latency + whether "off when settings closes" feels right.
+5. **Mic swap:** pick a different mic in the dropdown — the volume slider should jump to that mic's CURRENT volume and Enforce should switch on; "Use recommended settings (85%)" sets the slider back to the AT2020 default. Cancel without saving → nothing changed.
+6. **Sanity around the passthrough:** with Hear yourself ON, check Windows' own mmsys.cpl → mic → Listen tab — "Listen to this device" must remain UNCHECKED (MicGuard never touches it).
 
 ---
 

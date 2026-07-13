@@ -100,6 +100,19 @@ UI (webview)
  │   they CoInitialize defensively before touching Core Audio
  └─ update check / uninstall run in their own threads and block on
      App._dialog (threading.Event answered by the dialog's js_api)
+
+Settings-scoped live audio (exist ONLY while the settings window is visible)
+ ├─ meter pump thread: polls IAudioMeterInformation.GetPeakValue() at 20 Hz
+ │   and evaluate_js's the level bar; started by open_settings, stopped by
+ │   App._settings_closing (the Cancel/Save/✕ path)
+ └─ MicMonitor thread ("hear yourself"): WASAPI shared-mode passthrough,
+     selected mic → default speakers (IAudioClient + hand-declared
+     IAudioCaptureClient/IAudioRenderClient, AUTOCONVERTPCM flags so one
+     format fits both ends). While it runs, Enforcer.hold_volume=True lets
+     the user drag the volume live without enforcement snapping it back;
+     stopping the monitor clears the hold and pokes the enforcer. In-app by
+     design: Windows' own "Listen to this device" is never touched, so
+     closing settings can't clobber a listen the user enabled elsewhere.
 ```
 
 **The enforcement loop in words:** anything that touches the mic fires a COM
@@ -154,6 +167,20 @@ the rename back). Version comparison is `parse_version` on
   `hide()`, only `_quit` destroys.
 - **js_api handlers run on webview worker threads** — CoInitialize
   defensively (try/except) before any Core Audio call there.
+- **Release COM pointers on their own thread BEFORE CoUninitialize.** Short-
+  lived audio threads (MicMonitor, the meter pump) null out every COM local
+  and `gc.collect()` before CoUninitialize — letting the GC Release them
+  later, from another thread, is an access-violation crash (found 2026-07-12
+  while building hear-yourself).
+- **Never name a Thread attribute `_stop`** — it shadows
+  `threading.Thread._stop()` and breaks `join()`/`is_alive()` with
+  `'Event' object is not callable`. Stop events are `_stop_evt`.
+- **The tray menu's blur-to-close has a 0.5 s grace window** — after a tray
+  click the taskbar reclaims foreground for a beat; treating that first blur
+  as "clicked away" made the menu flash and vanish (user-reported v1.3.2).
+  `_blur_menu` re-asserts SetForegroundWindow inside the grace, hides after.
+  The menu is also positioned from its REAL GetWindowRect size — pywebview
+  frameless windows come out smaller than the requested width/height.
 - **`background_color="#09090b"` on every create_window** — without it
   WebView2 flashes white before first paint (user-reported).
 - **`DEFAULT_CONFIG | json.load(f)`** in `load_config` is the config migration
