@@ -738,6 +738,32 @@ DIALOG_HTML = """<!doctype html>
 <div class="btns">__BUTTONS__</div>
 </body></html>"""
 
+ALERT_W, ALERT_H = 340, 76
+
+ALERT_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{color-scheme:dark}
+html,body{height:100%;background:#09090b}
+body{color:#fafafa;border:1px solid #27272a;padding:12px 14px;cursor:pointer;
+     user-select:none;overflow:hidden;
+     font:13px/1.45 'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif}
+.t{font-weight:700;display:flex;gap:8px;align-items:center}
+.t .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.warn .dot{background:#f59e0b}.ok .dot{background:#22c55e}
+.s{color:#a1a1aa;font-size:12.5px;margin-top:3px;white-space:nowrap;
+   overflow:hidden;text-overflow:ellipsis}
+</style></head><body onclick="pywebview.api.dismiss()">
+<div class="t" id="title"><span class="dot"></span><span id="tt"></span></div>
+<div class="s" id="sub"></div>
+<script>
+function setAlert(kind, title, sub){
+  document.getElementById('title').className = 't ' + kind;
+  document.getElementById('tt').textContent = title;
+  document.getElementById('sub').textContent = sub;
+}
+</script></body></html>"""
+
 
 # --------------------------------------------------------------------------
 # Enforcement engine
@@ -902,11 +928,14 @@ class App:
                 self.cfg["profiles"][0]["mics"] = [
                     {"id": device_id, "name": device_name or "", "volume": volume}]
             save_config(self.cfg)
-        self.enforcer = Enforcer(self)  # Task 4 wires on_fallback
+        self.enforcer = Enforcer(self, on_fallback=self.notify_fallback)
         self.icon = None
         self._settings_win = None
         self._menu_win = None
         self._menu_shown_at = 0.0
+        self._alert_win = None
+        self._alert_timer = None
+        self._alert_primed = False
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
         self._meter_device_id = (self._current_mic() or {}).get("id")
@@ -986,6 +1015,7 @@ class App:
         if self.first_run:
             self._start_meter()
         self._make_menu_window(hidden=True)
+        self._make_alert_window()
         webview.start()
         # every window destroyed -> we are quitting
         try:
@@ -1011,6 +1041,9 @@ class App:
         # destroying every webview window makes webview.start() return in
         # run(), which stops the tray icon and the enforcer
         import webview
+        if self._alert_timer:
+            self._alert_timer.cancel()
+            self._alert_timer = None
         for w in list(webview.windows):
             try:
                 w.destroy()
@@ -1467,6 +1500,101 @@ class App:
             self._menu_win.evaluate_js("window.focus()")
         except Exception as e:
             log.warning("themed tray menu failed: %s", e)
+
+    # ---- no-focus fallback alert (themed) ----
+    # Fires from the Enforcer thread when the primary device in a flow's list
+    # is lost and the enforcer falls back to (or runs out of) alternates.
+    # Shown WITHOUT stealing foreground focus so games/fullscreen apps keep
+    # input — see _show_noactivate. Persistent hide/show singleton like the
+    # tray menu; auto-dismisses after 8s via a resettable timer.
+
+    def _make_alert_window(self):
+        import webview
+        app = self
+
+        class Api:
+            def dismiss(self_api):
+                app._hide_alert()
+
+        self._alert_win = webview.create_window(
+            f"{APP_NAME} Alert", html=ALERT_HTML, js_api=Api(),
+            width=ALERT_W, height=ALERT_H, frameless=True, on_top=True,
+            resizable=False, hidden=True, background_color="#09090b")
+        self._alert_primed = False
+
+        def _on_closed():
+            app._alert_win = None
+            app._alert_primed = False
+
+        self._alert_win.events.closed += _on_closed
+
+    def _hide_alert(self):
+        try:
+            if self._alert_win:
+                self._alert_win.hide()
+        except Exception:
+            pass
+
+    def _show_noactivate(self, win, title, x, y):
+        """Show a webview window at (x,y) WITHOUT stealing focus from the
+        foreground app (games keep input)."""
+        u = ctypes.windll.user32
+        hwnd = u.FindWindowW(None, title)
+        if not hwnd:
+            win.show()
+            return
+        GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW = -20, 0x08000000, 0x00000080
+        style = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        u.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        win.move(x, y)
+        u.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+
+    def notify_fallback(self, flow_label, lost_name, now_entry):
+        """Called from the Enforcer thread when a flow's primary device is
+        lost. Logs always; the popup itself is gated on cfg["notify_fallback"].
+        Never raises — enforcement must keep running regardless."""
+        kind_name = "Mic" if flow_label == "capture" else "Output"
+        if now_entry is None:
+            kind, title = "warn", f"{kind_name} disconnected"
+            sub = f"{lost_name or 'Device'} gone — nothing in your list is connected"
+        elif lost_name:
+            kind, title = "ok", f"{kind_name} switched"
+            sub = (f"{lost_name} → {now_entry['name']}"
+                   f" @ {now_entry.get('volume', '?')}%")
+        else:
+            return
+        log.info("fallback alert: %s — %s", title, sub)
+        if not self.cfg.get("notify_fallback"):
+            return
+        import webview
+        try:
+            if self._alert_win is None:
+                self._make_alert_window()
+            if not self._alert_primed:
+                # WebView2 never composites a frame for a window shown ONLY
+                # via the SW_SHOWNOACTIVATE path in _show_noactivate — it
+                # paints solid black until it has been through one normal
+                # (activating) show/hide cycle. This can only run once the
+                # webview GUI loop is live (webview.start() has returned
+                # control to its event loop), so it happens lazily here on
+                # first use rather than at pre-create time in App.run().
+                self._alert_win.move(-32000, -32000)  # off-screen: no flash
+                self._alert_win.show()
+                self._alert_win.hide()
+                self._alert_primed = True
+            self._alert_win.evaluate_js(
+                f"setAlert({json.dumps(kind)}, {json.dumps(title)}, {json.dumps(sub)})")
+            screen = webview.screens[0]
+            self._show_noactivate(self._alert_win, f"{APP_NAME} Alert",
+                                  screen.width - ALERT_W - 16,
+                                  screen.height - ALERT_H - 56)
+            if self._alert_timer:
+                self._alert_timer.cancel()
+            self._alert_timer = threading.Timer(8.0, self._hide_alert)
+            self._alert_timer.daemon = True
+            self._alert_timer.start()
+        except Exception as e:
+            log.warning("fallback alert failed: %s", e)
 
     def _patch_tray_clicks(self):
         """Reroute tray clicks: left → Settings, right → the themed menu.
