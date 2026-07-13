@@ -51,5 +51,27 @@ class TestActiveProfileLists(unittest.TestCase):
         self.assertEqual((mics, outs), ([], []))
 
 
+class TestPickDevice(unittest.TestCase):
+    ENTRIES = [{"id": "a", "name": "First", "volume": 85},
+               {"id": "b", "name": "Second", "volume": 60},
+               {"id": "c", "name": "Third", "volume": 40}]
+
+    def test_picks_highest_priority_connected(self):
+        self.assertEqual(m.pick_device(self.ENTRIES, {"b", "c"})["id"], "b")
+
+    def test_first_wins_when_all_connected(self):
+        self.assertEqual(m.pick_device(self.ENTRIES, {"a", "b", "c"})["id"], "a")
+
+    def test_none_when_nothing_connected(self):
+        self.assertIsNone(m.pick_device(self.ENTRIES, {"zzz"}))
+
+    def test_empty_list_gives_none(self):
+        self.assertIsNone(m.pick_device([], {"a"}))
+
+    def test_stale_ids_skipped(self):
+        entries = [{"id": "gone", "name": "Unplugged", "volume": 85}] + self.ENTRIES
+        self.assertEqual(m.pick_device(entries, {"c"})["id"], "c")
+
+
 if __name__ == "__main__":
     unittest.main()

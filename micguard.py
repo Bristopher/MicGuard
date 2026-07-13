@@ -106,12 +106,11 @@ def set_default_endpoint(device_id: str) -> None:
         policy.SetDefaultEndpoint(device_id, role)
 
 
-def list_capture_devices():
-    """Return [(device_id, friendly_name)] for all active microphones."""
+def list_devices(flow: int):
+    """[(device_id, friendly_name)] for all ACTIVE endpoints of a flow
+    (EDataFlow.eCapture.value = mics, eRender.value = speakers/headphones)."""
     enumerator = AudioUtilities.GetDeviceEnumerator()
-    collection = enumerator.EnumAudioEndpoints(
-        EDataFlow.eCapture.value, DEVICE_STATE.ACTIVE.value
-    )
+    collection = enumerator.EnumAudioEndpoints(flow, DEVICE_STATE.ACTIVE.value)
     devices = []
     for i in range(collection.GetCount()):
         imm = collection.Item(i)
@@ -120,13 +119,27 @@ def list_capture_devices():
     return devices
 
 
-def get_default_capture_id(role) -> str | None:
+def list_capture_devices():
+    return list_devices(EDataFlow.eCapture.value)
+
+
+def pick_device(entries, active_ids):
+    """Highest-priority entry whose device is currently connected, else None.
+    Pure function — the whole fallback feature hangs off this line."""
+    return next((e for e in entries if e.get("id") in active_ids), None)
+
+
+def get_default_endpoint_id(flow: int, role) -> str | None:
     enumerator = AudioUtilities.GetDeviceEnumerator()
     try:
-        imm = enumerator.GetDefaultAudioEndpoint(EDataFlow.eCapture.value, role.value)
+        imm = enumerator.GetDefaultAudioEndpoint(flow, role.value)
         return imm.GetId()
     except Exception:
         return None
+
+
+def get_default_capture_id(role) -> str | None:
+    return get_default_endpoint_id(EDataFlow.eCapture.value, role)
 
 
 def autodetect_device():
