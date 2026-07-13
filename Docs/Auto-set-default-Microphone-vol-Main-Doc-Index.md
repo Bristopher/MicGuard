@@ -17,6 +17,7 @@ about doesn't exist.
 | [Development/Build-and-Release](Development/Build-and-Release.md) | Full build & update walkthrough — PyInstaller flags that matter, release flow, botched-release recovery, dev-machine install |
 | [Development/Release-Notes](Development/Release-Notes.md) | Release-notes templates (update + initial release) and the AI prompt that drafts them from `git log` |
 | [superpowers/specs/2026-07-13 device-priority-profiles-hotkeys](superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md) | Approved v1.5 design: capture+render priority/fallback lists w/ per-device volumes, profiles, fallback alert popup, volume hotkeys + game-safe OSD |
+| [superpowers/plans/2026-07-13 device-priority-profiles-hotkeys](superpowers/plans/2026-07-13-device-priority-profiles-hotkeys.md) | v1.5 implementation plan — 8 tasks w/ TDD steps (introduces tests/test_micguard.py) |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes
