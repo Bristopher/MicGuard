@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-13 — added §7 (v1.5.0: capture+render priority lists, profiles, fallback alerts, volume hotkeys + OSD)
+**Updated:** 2026-07-13 — added §7b (v1.5.0 test-round fixes: edit-wipe on tray click, save-stays-open, hotkey-conflict surfacing)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `a58c445` (2026-07-13, v1.5 implementation complete) + this docs commit, all commits reviewed through **2026-07-13** — everything shipped is in §1–§7 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -74,6 +74,18 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 4. **Hear yourself:** flip the switch, speak — you hear your mic through your speakers (small delay is normal for shared-mode WASAPI; judge if it's acceptable). Drag the volume slider while talking — loudness follows live, no snap-back fight. Close settings → playback stops, volume returns to the configured target. Judgment: latency + whether "off when settings closes" feels right.
 5. **Mic swap:** pick a different mic in the dropdown — the volume slider should jump to that mic's CURRENT volume and Enforce should switch on; "Use recommended settings (85%)" sets the slider back to the AT2020 default. Cancel without saving → nothing changed.
 6. **Sanity around the passthrough:** with Hear yourself ON, check Windows' own mmsys.cpl → mic → Listen tab — "Listen to this device" must remain UNCHECKED (MicGuard never touches it).
+
+## 7b. v1.5.0 test-round fixes — save keeps window open, no more edit-wipe, hotkey conflicts visible (~3 min)
+
+**Shipped:** the fix commit after your first v1.5 test pass (2026-07-13). Your two reports, root-caused:
+(1) "saved outputs revert" — left-clicking the tray while settings was already open silently reloaded the working copy, wiping unsaved edits BEFORE your Save wrote them (reproduced deterministically; open_settings now only refreshes when the window was actually hidden);
+(2) "no settings for shift+F1" — the combo binds fine, but ANOTHER APP on your PC already holds Shift+F1 globally, so Windows refused MicGuard's registration and the failure was log-only. Failed combos now show a red border + the Save confirmation says "Saved — shift+f1 in use by another app".
+Also per your request: **Save no longer closes the window** — green "Saved ✓" appears next to the buttons; the old Cancel button is now "Close".
+**Machine-verified:** tray-click mid-edit keeps edits; real-click Save persists outputs+hotkeys to disk and reopen shows them; savemsg green/amber states; hkbad red marker; pytest 15/15.
+
+1. Redo your original flow: add/change your speakers in the outputs list → Save (window stays open, green "Saved ✓") → Close → reopen → your changes must still be there.
+2. Bind shift+F1 again, enable hotkeys, Save → expect the amber "in use by another app" message and the red combo field — then pick a different combo (e.g. ctrl+alt+F1) and confirm it fires with the OSD. If you can figure out WHICH app owns Shift+F1 and free it, the binding will register on next save/launch.
+3. Judgment: does "Saved ✓" read clearly enough, or do you want the row to flash/scroll into view too?
 
 ## 7. v1.5.0 — device priority lists (capture + render), profiles, fallback alerts, volume hotkeys + OSD (~20 min)
 

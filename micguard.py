@@ -402,6 +402,9 @@ class HotkeyManager(threading.Thread):
         self.app = app
         self._tid = None
         self._ready = threading.Event()
+        # combos RegisterHotKey refused (held globally by another app) —
+        # surfaced in the settings UI; valid once _ready is set
+        self.failed: list[str] = []
 
     def start_if_enabled(self):
         if self.app.cfg.get("hotkeys", {}).get("enabled"):
@@ -423,6 +426,7 @@ class HotkeyManager(threading.Thread):
                 # plain mods (no MOD_NOREPEAT): holding the combo keeps stepping
                 if not u.RegisterHotKey(None, n, parsed[0], parsed[1]):
                     log.warning("hotkey %r already in use elsewhere", b["keys"])
+                    self.failed.append(b["keys"])
                     continue
                 actions[n] = b
             self._ready.set()
@@ -766,6 +770,13 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .gh{margin-right:auto;align-self:center;color:#71717a;font-size:12.5px;
     text-decoration:none;cursor:pointer}
 .gh:hover{color:#fafafa;text-decoration:underline}
+#savemsg{flex:1;min-width:0;align-self:center;text-align:right;
+      font-size:12.5px;font-weight:600;color:#22c55e;
+      opacity:0;transition:opacity .3s;white-space:nowrap;overflow:hidden;
+      text-overflow:ellipsis}
+#savemsg.show{opacity:1}
+#savemsg.warn{color:#f59e0b}
+.hkkeys.hkbad{border-color:#7f1d1d;color:#f87171}
 .meter{height:5px;background:#18181b;border:1px solid #27272a;border-radius:999px;
        margin-top:14px;overflow:hidden}
 #meterfill{height:100%;width:0%;background:#22c55e;border-radius:999px;
@@ -856,7 +867,8 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 </div>
 <div class="btns">
   <a class="gh" href="javascript:void(0)" onclick="pywebview.api.open_github()">GitHub &#x2197;</a>
-  <button class="btn secondary" onclick="pywebview.api.cancel()">Cancel</button>
+  <span id="savemsg"></span>
+  <button class="btn secondary" onclick="pywebview.api.cancel()">Close</button>
   <button class="btn primary" onclick="save()">Save</button>
 </div>
 <script>
@@ -1029,8 +1041,10 @@ async function deleteProfile(){
 function hkRowHtml(b, i){
   const opts = ['system', ...S.sessions.map(x => 'app:' + x)];
   if (b.target && !opts.includes(b.target)) opts.push(b.target);
+  const bad = S.hotkeyFailures && S.hotkeyFailures.includes(b.keys);
   return `<div class="hkrow">
-    <input class="hkkeys" value="${esc(b.keys)}" placeholder="press keys&hellip;"
+    <input class="hkkeys${bad ? ' hkbad' : ''}" value="${esc(b.keys)}"
+      placeholder="press keys&hellip;"${bad ? ' title="In use by another app &mdash; pick a different combo"' : ''}
       spellcheck="false" onkeydown="hkCapture(event,${i})">
     <div class="select-wrap hksel"><select
       onchange="S.hotkeys.bindings[${i}].target=this.value">${
@@ -1102,9 +1116,25 @@ async function refresh(profile){
   setMeter(0);
 }
 window.addEventListener('pywebviewready', () => refresh());
-function save(){
+let saveMsgTimer = null;
+function showSaved(r){
+  const el = document.getElementById('savemsg');
+  const fails = (r && r.hotkeyFailures) || [];
+  if (fails.length){
+    el.textContent = `Saved — ${fails.join(', ')} in use by another app`;
+    el.title = el.textContent;
+    el.className = 'show warn';
+  } else {
+    el.textContent = 'Saved ✓';
+    el.title = '';
+    el.className = 'show';
+  }
+  if (saveMsgTimer) clearTimeout(saveMsgTimer);
+  saveMsgTimer = setTimeout(() => { el.className = ''; }, fails.length ? 6000 : 2500);
+}
+async function save(){
   const strip = l => l.map(d => { const c = {...d}; delete c.connected; return c; });
-  pywebview.api.save({
+  const r = await pywebview.api.save({
     active: document.getElementById('profsel').value,
     mics: strip(S.mics),
     outputs: strip(S.outputs),
@@ -1115,6 +1145,9 @@ function save(){
     checkUpdates: document.getElementById('sw_updates').checked,
     notifyFallback: document.getElementById('sw_fallback').checked,
   });
+  S.hotkeyFailures = (r && r.hotkeyFailures) || [];
+  renderHk();  // repaint red markers on combos another app holds
+  showSaved(r);
 }
 </script></body></html>"""
 
@@ -1689,6 +1722,7 @@ class App:
                     "all_outputs": [[i, n] for i, n in all_outputs],
                     "hotkeys": {"enabled": bool(hk.get("enabled")),
                                 "bindings": hk.get("bindings") or []},
+                    "hotkeyFailures": app._hotkey_failures(),
                     "enforce": bool(app.cfg["enforce"]),
                     "runAtStartup": bool(app.cfg["run_at_startup"]),
                     "checkUpdates": bool(app.cfg["check_updates"]),
@@ -1846,12 +1880,13 @@ class App:
                 app.enforcer._set_once_done.clear()  # volumes may have changed
                 app.enforcer.reattach()
                 app.enforcer.poke()
-                restart_hotkeys = getattr(app, "_restart_hotkeys", None)  # wired by the hotkey engine task
-                if callable(restart_hotkeys):
-                    restart_hotkeys()
+                app._restart_hotkeys()
                 if app.icon:
                     app.icon.update_menu()
-                self_api.cancel()
+                # window stays OPEN (user request 2026-07-13) — JS shows the
+                # green "Saved" confirmation; report unregistrable combos
+                return {"ok": True,
+                        "hotkeyFailures": app._hotkey_failures(wait=2.0)}
 
             def open_github(self_api):
                 webbrowser.open(f"https://github.com/{GITHUB_REPO}")
@@ -1889,6 +1924,14 @@ class App:
             self._start_meter()
             return
         try:
+            # already on screen? just bring it forward — refreshing here would
+            # silently wipe unsaved edits (bit Bristopher on 2026-07-13: edit
+            # outputs, tray-click, Save → the pre-edit state got saved)
+            u = ctypes.windll.user32
+            hwnd = u.FindWindowW(None, f"{APP_NAME} Settings")
+            if hwnd and u.IsWindowVisible(hwnd):
+                self._settings_win.show()
+                return
             self._settings_win.evaluate_js("typeof refresh === 'function' && refresh()")
             self._center_settings()
             self._settings_win.show()
@@ -2301,6 +2344,17 @@ class App:
                 self.hotkeys.start()
         except Exception as e:
             log.warning("hotkey restart failed: %s", e)
+
+    def _hotkey_failures(self, wait: float = 0.0) -> list:
+        """Combos the running manager could not register (held by another
+        app). With wait > 0, blocks briefly for a just-restarted manager to
+        finish registering so settings save can report failures immediately."""
+        mgr = self.hotkeys
+        if mgr is None or not mgr.is_alive():
+            return []
+        if wait:
+            mgr._ready.wait(timeout=wait)
+        return list(mgr.failed)
 
     def _patch_tray_clicks(self):
         """Reroute tray clicks: left → Settings, right → the themed menu.
