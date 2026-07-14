@@ -1507,17 +1507,21 @@ body{color:#fafafa;padding:0;user-select:none;overflow:hidden;
        display:flex;align-items:center;justify-content:center;
        font:700 11px Consolas,monospace;color:#a1a1aa}
 .row.sel .badge{background:#22c55e;color:#052e16}
-.info{flex:1;min-width:0}
+.info{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
 .name{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;
-      text-overflow:ellipsis}
+      text-overflow:ellipsis;display:block}
 .name .duck{color:#f59e0b;font-weight:500;font-size:11px;margin-left:6px}
-.bar{height:5px;background:#27272a;border-radius:999px;margin-top:4px;
+.bar{display:block;height:5px;background:#27272a;border-radius:999px;
      position:relative;overflow:hidden}
-.bar .fill{height:100%;background:#22c55e;border-radius:999px}
-.bar .over{position:absolute;top:0;right:0;height:100%;background:#4ade80}
+.bar .fill{display:block;height:100%;background:#22c55e;border-radius:999px}
+.bar .div{display:block;position:absolute;top:0;bottom:0;left:75%;width:1px;
+          background:rgba(255,255,255,.18)}
+.bar .over{display:block;position:absolute;top:0;right:0;height:100%;
+           background:#4ade80;border-radius:0 999px 999px 0}
 .pct{width:44px;text-align:right;font:600 12px Consolas,monospace;flex:none}
 .pct .b{color:#4ade80}
-.pct.na{color:#52525b;font-size:10.5px}
+.pct.na{width:auto;max-width:64px;text-align:right;color:#52525b;
+        font-size:10px;white-space:nowrap;flex:none}
 .chip{flex:none;font:600 9.5px Consolas,monospace;color:#71717a;
       background:#18181b;border:1px solid #27272a;border-radius:5px;
       padding:2px 5px;text-transform:uppercase}
@@ -1536,14 +1540,16 @@ function setMixer(model){
     const pctHtml = r.pct === null
       ? `<span class="pct na">no audio</span>`
       : `<span class="pct">${r.pct + (r.boost || 0)}%${r.boost ? '<span class="b">*</span>' : ''}</span>`;
-    const fill = r.pct === null ? 0 : Math.min(100, r.pct);
-    const over = r.boost ? Math.min(33, r.boost * 0.66) : 0;   // boost zone sliver
+    // track reserves its last 25% as a boost overlay zone (divider at the 75%
+    // mark = "100%"); the main fill scales into the remaining 75%.
+    const fill = r.pct === null ? 0 : Math.min(100, r.pct) / 100 * 75;
+    const over = r.boost ? Math.min(25, 5 + r.boost) : 0;
     return `<div class="row${i === model.selected ? ' sel' : ''}">
       <span class="badge">${i + 1}</span>
       <span class="info"><span class="name">${esc(r.label)}${
         r.ducked ? `<span class="duck">ducked &minus;${r.ducked}%</span>` : ''}</span>
-        <span class="bar"><span class="fill" style="width:${fill}%"></span>${
-          over ? `<span class="over" style="width:${over}px"></span>` : ''}</span></span>
+        <span class="bar"><span class="fill" style="width:${fill}%"></span><span class="div"></span>${
+          over ? `<span class="over" style="width:${over}%"></span>` : ''}</span></span>
       ${pctHtml}
       ${r.chip ? `<span class="chip">${esc(r.chip)}</span>` : ''}
     </div>`;
