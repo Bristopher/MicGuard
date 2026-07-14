@@ -2,8 +2,8 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-13 — added §7b (v1.5.0 test-round fixes: edit-wipe on tray click, save-stays-open, hotkey-conflict surfacing)
-**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `a58c445` (2026-07-13, v1.5 implementation complete) + this docs commit, all commits reviewed through **2026-07-13** — everything shipped is in §1–§7 below. **Next sweep starts from this docs commit.**
+**Updated:** 2026-07-14 — added §9 (v1.6: mixer popup, boost-past-100%, active-window hotkey target, settings target dropdown, default `shift+f2` binding)
+**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → v1.6 Task 6 docs commit (2026-07-14) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
 
@@ -155,12 +155,62 @@ output. None of this substitutes for real hardware/game/call testing below.
    obscured by other apps/taskbar on his monitor setup? Does the wording
    ("X disconnected — now guarding: Y @ Z%") read naturally?
 
+## 9. v1.6 — mixer popup, boost-past-100%, active-window hotkey target (~15 min)
+
+**Shipped:** `67ac40d` (v1.5/pre-mixer head) → the v1.6 settings/docs commit on
+`main`, ship date 2026-07-14 — NOT yet released (`VERSION` stays `1.5.0`
+until `.\release.ps1 -Version 1.6.0` runs). Full detail: [Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md)
+§"Mixer popup & boost (v1.6)".
+
+**Machine-verified (Task 6 sweep, 2026-07-14):** `uv run pytest -q` — 25/25
+green (adds `TestBoostedNudge`, `TestBuildMixerRows`, session helpers on top
+of the v1.5 15); fresh `DEFAULT_CONFIG` contains the `shift+f2`→`mixer`
+binding while the real `%APPDATA%\MicGuard\config.json` is untouched
+(byte-identical hash before/after); settings harness confirms the hotkey
+target dropdown lists System volume/Active window/Mixer popup (toggle),
+picking Mixer disables the step input, and `save()` writes `step: 0` for a
+mixer row; the mixer ephemeral-keys harness (digit select / arrow nudge /
+Esc close) still passes; sabotage test sub-second restore, source and frozen
+exe. None of this substitutes for real in-game/multi-monitor testing below.
+
+1. **Real borderless-game test.** Launch a borderless (not exclusive
+   fullscreen) game, press `shift+f2` — the mixer popup should appear without
+   stealing focus or input from the game. Press digits 1-9 to select rows and
+   up/down to nudge; confirm the game keeps keyboard focus throughout (no
+   alt-tab needed). While the game is foreground and something else (e.g.
+   Discord) is in a call, boost Discord's row past 100% — the game's own
+   audio should audibly duck, and the amber "ducked" chip on the game's row
+   should match what you hear.
+2. **Multi-monitor placement.** With the mouse cursor resting on your SECOND
+   monitor, press the mixer hotkey — the popup must appear bottom-center of
+   THAT monitor, not wherever the game/foreground window happens to be.
+3. **OSD dead-strip gone.** Eyeball the volume OSD (system/app hotkeys, not
+   the mixer) — confirm the content-height fix means there's no empty strip
+   below the label/bar (this was your original screenshot complaint from the
+   v1.6 kickoff).
+4. **"No audio" active-window case.** Alt-tab to a window with no audio
+   session (e.g. Explorer) and press an `active`-target hotkey or select it
+   in the mixer — confirm you get a graceful "no audio" note, not a crash or
+   silent no-op.
+5. **Exclusive-fullscreen limitation acknowledgment.** Switch a game to true
+   exclusive fullscreen (not borderless) and try the mixer hotkey — per the
+   documented limitation, the popup may not draw or may not receive the
+   digit/arrow keys even though the hotkey itself fires. Confirm this matches
+   what you see, and judge whether it's an acceptable known gap or worth a
+   README/in-app note.
+6. **Hotkey editor: mixer target selectable with disabled step.** Open
+   Settings → Hotkeys, add or edit a row, pick "Mixer popup (toggle)" from
+   the target dropdown — confirm the step field shows "—" and is disabled/
+   unclickable, and Save doesn't error or silently coerce it back to a
+   number.
+
 ---
 
 ## Sweep log (commit ranges reviewed for unverified work)
 
 - 2026-07-12: `4bda0ee` (root) → `v1.1.0` release commit, entire repo history (rewrite day). Everything shipped is §1–§2. Excluded as no-UI plumbing: `.gitignore`, `uv.lock`, docs scaffold content (this docs tree), README wording.
 - 2026-07-13: `c4a3839` (v1.5 Task 1 start) → `a58c445` (v1.5 implementation, all 8 tasks) + this docs commit. Everything shipped is §7. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
+- 2026-07-14: `67ac40d` (v1.5/pre-mixer head) → v1.6 Task 6 docs commit (mixer popup, boost, active target, settings targets, default `shift+f2` binding, all 5 v1.6 implementation tasks). Everything shipped is §9. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
 
 ## Changelog (verified items move here)
 

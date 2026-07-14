@@ -1,7 +1,7 @@
 # MicGuard — Architecture
 
 **Status:** ✅ Current — describes the shipped v1.x app
-**Last Updated:** 2026-07-13
+**Last Updated:** 2026-07-14
 
 ## Overview
 
@@ -80,6 +80,7 @@ Runtime footprint on a user's machine:
 | meter pump | `App._start_meter` | while settings window open | defensive CoInitialize | 20 Hz `IAudioMeterInformation.GetPeakValue()` → level bar |
 | `MicMonitor` ("hear yourself") | `App._set_monitor` | while the switch is on | CoInitialize; releases before CoUninitialize | WASAPI passthrough selected mic → speakers; sets `Enforcer.hold_volume` |
 | Alert / OSD hide timers | `notify_fallback` / `show_osd` | transient `threading.Timer` | none (UI only) | auto-hide the fallback popup (8 s) / hotkey OSD (1.2 s) |
+| Mixer idle timer | `App._arm_mixer_timer` (v1.6) | armed while the mixer popup is visible; re-armed on every ephemeral key press | none (UI only) | `threading.Timer(6.0, self._hide_mixer)` auto-closes the popup and releases the ephemeral keys after 6 s of no digit/arrow/Esc activity |
 
 `micguard.py` sections top-to-bottom: Core Audio plumbing → `HotkeyManager` →
 event callbacks → config/registry/update/uninstall helpers (incl.
@@ -140,14 +141,31 @@ HotkeyManager (threading.Thread, daemon) [own Win32 message loop, no polling]
  │  binding (plain mods, no MOD_NOREPEAT, so holding the combo auto-repeats)
  ├─ blocking GetMessageW loop — zero idle cost; WM_HOTKEY → _fire(binding)
  │   ├─ target "system": adjusts the default render endpoint's volume
- │   └─ target "app:<exe>": pycaw AudioUtilities.GetAllSessions(), matches
- │       process name case-insensitively, adjusts SimpleAudioVolume.MasterVolume
+ │   ├─ target "active": adjusts the foreground window's process session
+ │   ├─ target "app:<exe>": pycaw AudioUtilities.GetAllSessions(), matches
+ │   │   process name case-insensitively, adjusts SimpleAudioVolume.MasterVolume
+ │   │   ("active"/"app:<exe>" both route through boosted_nudge — see below)
+ │   └─ target "mixer": App.toggle_mixer() — shows/hides the mixer popup;
+ │       carries no step (step is always 0 for mixer bindings)
  ├─ every fire calls App.show_osd(label, percent) — never raises even if the
  │   OSD window itself fails (hotkeys must keep working)
+ ├─ mixer ephemeral keys (v1.6): WHILE the popup is visible, App posts
+ │   WM_APP_MIXER_ON/OFF (0x8001/0x8002) into THIS thread's queue — the ONLY
+ │   way another thread can add/remove RegisterHotKey registrations, since
+ │   RegisterHotKey is per-thread. `_register_mixer_keys`/`_unregister_mixer_keys`
+ │   run exclusively on the manager thread's message loop; a bare-key id
+ │   >= 100 (digits 1-9 = ids 100-108, up/down = 109/110, Esc = 111) routes to
+ │   `App._mixer_key` instead of `_fire`. `_register_mixer_keys` is a no-op if
+ │   `_mixer_ids` is already populated — guards a double WM_APP_MIXER_ON from
+ │   orphaning a second set of registrations that never gets unregistered.
+ │   `set_mixer_keys(on)` is the thread-safe entry point every other thread
+ │   calls; it just PostThreadMessageW's the request, never touches
+ │   RegisterHotKey directly.
  └─ shutdown(): waits for `_ready` (thread may not have registered yet) before
     PostThreadMessageW(WM_QUIT) — posting into an unregistered thread would
     hang forever; App._restart_hotkeys replaces the whole instance on
-    enable/rebind rather than mutating a running one
+    enable/rebind rather than mutating a running one (a live mixer popup is
+    hidden first, releasing its ephemeral keys, before the old manager dies)
 
 Settings-scoped live audio (exist ONLY while the settings window is visible)
  ├─ meter pump thread: polls IAudioMeterInformation.GetPeakValue() at 20 Hz
@@ -275,6 +293,24 @@ the rename back). Version comparison is `parse_version` on
   another app already owns it registration just fails (logged, not fatal).
   This is exactly why hotkeys ship with `hotkeys.enabled = False` by default:
   the feature is opt-in, not a silent global keyboard grab.
+- **Ephemeral RegisterHotKey while a popup is open — register/unregister ONLY
+  on the manager thread via WM_APP posts; guard double-ON.** The mixer's
+  bare-key bindings (digits/arrows/Esc) can only be registered on the
+  `HotkeyManager` thread that owns them (RegisterHotKey is per-thread). Any
+  other thread (App, on show/hide) must go through
+  `HotkeyManager.set_mixer_keys(on)`, which posts `WM_APP_MIXER_ON`/`_OFF`
+  into that thread's message loop rather than calling `RegisterHotKey`
+  directly. `_register_mixer_keys` also short-circuits if `_mixer_ids` is
+  already non-empty — without that guard, two ON posts in a row (e.g. a fast
+  reopen) would register the same ids twice and only the first set would ever
+  get unregistered, permanently swallowing those keys system-wide.
+- **`MonitorFromPoint`'s return type must be declared `HMONITOR`, not left at
+  ctypes' default `c_int`.** `HMONITOR` is a pointer-sized handle; on x64 the
+  default 32-bit-int restype silently truncates it, so `GetMonitorInfoW`
+  either fails or returns the wrong monitor's geometry — the mixer popup
+  placed itself on the wrong screen in multi-monitor testing until
+  `u.MonitorFromPoint.restype = ctypes.wintypes.HMONITOR` was set explicitly
+  (found 2026-07-13 building the mixer's cursor-monitor placement).
 - **`HotkeyManager.shutdown()` must wait for `_ready` before posting
   `WM_QUIT`.** A freshly-started manager may not have called `RegisterHotKey`
   /entered `GetMessageW` yet; posting `WM_QUIT` to a thread ID that hasn't

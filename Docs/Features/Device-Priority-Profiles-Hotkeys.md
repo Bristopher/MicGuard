@@ -1,9 +1,9 @@
 # Device Priority Lists, Profiles, Fallback Alerts, Volume Hotkeys
 
-**Status:** ✅ Production (v1.5)
+**Status:** ✅ Production (v1.5); mixer popup & boost added v1.6
 **Author:** Bristopher (design), AI-assisted implementation
-**Date:** 2026-07-13
-**Version:** 1.5.0
+**Date:** 2026-07-14 (v1.6 additions)
+**Version:** 1.5.0 (mixer/boost code lands ahead of the 1.6.0 tag — see RELEASING.md)
 
 ---
 
@@ -63,6 +63,14 @@ flag is set, else set once at switch time).
   (`migrate_config`) so any age of installed config upgrades cleanly forever
 - ✅ First pytest suite (`tests/test_micguard.py`, 15 tests) covering every
   pure function this feature introduced
+- ✅ (v1.6) Mixer popup — a gkey-style volume mixer summoned by a dedicated
+  hotkey target (`mixer`, default `shift+f2` on fresh installs), with
+  boost-past-100% for the active window or a named app session; see "Mixer
+  popup & boost" below
+- ✅ (v1.6) `active` hotkey target — adjusts whatever window currently has
+  focus, no per-app binding needed
+- ✅ (v1.6) 10 more pytest tests (`boosted_nudge`, `build_mixer_rows`, session
+  helpers) — suite is now 25 tests
 
 ### Planned / deferred
 - 🔜 Hotkey profile cycling
@@ -70,10 +78,62 @@ flag is set, else set once at switch time).
   banned by the Enforcer wake-queue convention; would need a different,
   event-driven detection mechanism to be considered)
 - 🔜 Mute-toggle hotkeys
-- 🔜 Per-app hotkey OSD mixer panel
 - 🔜 Communications-role split (different device for calls vs. general default)
+- 🔜 Mixer rows for more than the bound `app:<exe>` targets + active window
+  (e.g. every currently-audible session, not just the bound ones)
 
 (See [Docs/Future/](../Future/) if any of these get picked up as a "later" ask.)
+
+## Mixer popup & boost (v1.6)
+
+A `shift+f2`-style hotkey (target `mixer`) pops a small, gkey-style volume
+mixer instead of adjusting one target directly. It lists `System`, one row
+per distinct `app:<exe>` binding, then `Active window (<exe>)`; digits 1-9
+select a row, up/down nudge it, Esc closes it. The popup is a persistent
+no-activate singleton (`MIXER_HTML`) — same `WS_EX_NOACTIVATE` treatment as
+the alert/OSD windows, so it never steals focus from a game — and auto-hides
+after 6 s of no key activity (`App._arm_mixer_timer`, re-armed on every
+press).
+
+**Boost is transient, "duck the game" headroom past 100%.** Once a session
+(or the active window) is nudged UP while already at 100%, further up-presses
+raise a `boost` value 0..`MAX_BOOST` (50) instead of the session's own volume,
+and duck every OTHER currently-audible session by that same amount (or just
+the foreground game, if one is detected, so boosting Discord mid-call lowers
+the game and nothing else). `boosted_nudge` is the pure decision function;
+`BoostState` (`boost`/`ducked` dicts) lives on the `HotkeyManager` instance,
+not in config — **boost is never persisted** and resets whenever the manager
+restarts (rebind, hotkeys toggled off/on) or the app quits, via
+`App._restore_boost` un-ducking every session the old manager had lowered
+before the new instance takes over.
+
+**Visualization:** the mixer row for a boosted session shows the session's
+own bar plus a distinct "boost" segment for the amount over 100%, and a
+"ducked" chip on any row currently lowered by someone else's boost — so it's
+visually obvious which app is loud because of a deliberate boost and which
+one just got quieter to make room for it.
+
+**Exclusive-fullscreen limitation:** the no-activate popup trick relies on
+Windows compositing a top-most tool window over whatever has focus, which
+works for borderless/windowed games and DX/Vulkan apps using the normal
+desktop compositor. A game running true EXCLUSIVE fullscreen (bypassing the
+compositor) can still swallow the keyboard input needed to select/nudge rows,
+or simply never show the popup on top, even though the hotkey itself (a
+system-wide `RegisterHotKey`) still fires. Borderless windowed / windowed
+fullscreen is the supported mode for in-game use; exclusive fullscreen is a
+known, accepted limitation (same class of issue as the alert/OSD windows).
+
+**Active-window target vs. mixer:** `active` (a plain hotkey, not the mixer)
+adjusts whatever process owns the foreground window directly, with no popup —
+useful for a single always-adjust-current-app binding. The mixer's own
+"Active window" row does the same lookup at popup-refresh time, so it tracks
+alt-tabs while the popup is open.
+
+**Default binding:** `shift+f2` → `mixer` ships in `DEFAULT_CONFIG` for fresh
+installs only. Existing users' `hotkeys.bindings` arrays are never mutated by
+an update (config migration is additive-merge only at the top level — see
+Dynamic-Settings.md) — add it manually via Settings → Hotkeys → **+ Add** if
+you installed before v1.6.
 
 ## Design Philosophy / Ideology
 
@@ -110,6 +170,15 @@ Pure functions (unit-tested, no COM/hardware):
   idempotent; strips the dead v1 keys.
 - `parse_hotkey(text: str) -> tuple[int, int] | None` — `"ctrl+shift+up"` →
   `(mods, vk)` for `RegisterHotKey`; `None` on anything unparseable.
+- (v1.6) `boosted_nudge(state: BoostState, exe, step, sessions, game_exe) ->
+  (actions: dict, shown_pct: int)` — pure decision function for one mixer/
+  hotkey nudge: clamps normally below 100%, engages `boost` (ducking other
+  sessions) once already at 100% and still being pushed up, un-ducks on the
+  way back down.
+- (v1.6) `build_mixer_rows(bindings, sessions, foreground_exe, state,
+  system_pct) -> list[dict]` — the mixer's row model (`key/label/pct/boost/
+  ducked/chip` per row): System, one row per distinct `app:<exe>` binding,
+  then Active window.
 
 Runtime classes/methods (COM/hardware-touching, verified live):
 
@@ -129,9 +198,21 @@ Runtime classes/methods (COM/hardware-touching, verified live):
   changed.
 - `App._prime_window(win, flag_attr)` / `_prime_windows` — the WebView2
   no-activate prime (see Architecture Gotchas).
-- `adjust_system_volume(step) -> (label, percent) | None`,
-  `adjust_app_volume(exe_name, step) -> (label, percent) | None` — the two
-  hotkey targets.
+- `adjust_system_volume(step) -> (label, percent) | None` — the `system`
+  hotkey target; `app:<exe>`/`active`/mixer targets all route through
+  `list_app_sessions`/`set_app_session`/`boosted_nudge` instead (v1.6 —
+  `adjust_app_volume` was removed as dead code once boost superseded it).
+- (v1.6) `App.toggle_mixer()` / `_show_mixer()` / `_hide_mixer()` /
+  `_mixer_visible()` — show/hide the mixer popup; callable from the hotkey
+  thread, never raises.
+- (v1.6) `App._mixer_key(action)` — handles a mixer ephemeral keypress
+  (`("row", n)` / `("nudge", ±2)` / `("close", 0)`) on the hotkey thread.
+- (v1.6) `HotkeyManager.set_mixer_keys(on)` — thread-safe request to
+  register/unregister the mixer's ephemeral digit/arrow/Esc keys (posts
+  `WM_APP_MIXER_ON`/`_OFF` into the manager thread's own loop).
+- (v1.6) `App._restore_boost(mgr)` — un-ducks every session `mgr.boost`
+  lowered; called on hotkey restart and app quit so boost never survives past
+  its owning `HotkeyManager` instance.
 
 ## Configuration
 
@@ -144,9 +225,10 @@ recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
 
 ## Testing
 
-- **Automated:** `uv run pytest -q` — `tests/test_micguard.py`, 15 tests
+- **Automated:** `uv run pytest -q` — `tests/test_micguard.py`, 25 tests
   across `TestMigrateConfig`, `TestActiveProfileLists`, `TestPickDevice`,
-  `TestParseHotkey`. No COM/hardware; safe in CI or on any machine.
+  `TestParseHotkey`, and (v1.6) `TestBoostedNudge`/`TestBuildMixerRows` and
+  the session-helper tests. No COM/hardware; safe in CI or on any machine.
 - **Live harness pattern** (per AI-Development-Guide §6, no COM = no automated
   test): build a profile whose #1 mic id is a fake string to force a fallback
   pick, confirm the enforcer selects #2 and `on_fallback` fires; press a
@@ -155,10 +237,12 @@ recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
   enforcement is unaffected by the render-flow generalization.
 - **Human-verify:** see
   [Verify/2026_07-12_Verification-Backlog.md](../Verify/2026_07-12_Verification-Backlog.md)
-  §7 for the full click-through list (real USB unplug/replug, profile
+  §7 for the v1.5 click-through list (real USB unplug/replug, profile
   switching feel, hotkeys during a fullscreen game, Discord hotkey mid-call,
   hold-volume-off not fighting volume keys, v1.4→v1.5 config migration on the
-  real installed copy).
+  real installed copy) and §9 for the v1.6 mixer/boost list (real borderless
+  game test, multi-monitor placement, boost duck audibility, exclusive-
+  fullscreen limitation acknowledgment, hotkey editor mixer target).
 
 ## Troubleshooting
 
@@ -169,6 +253,9 @@ recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
 | Fallback never alerts | `notify_fallback` is off, or the list has only one device (nothing to fall back to) | Check Settings → Fallback alerts switch; a single-device list has nowhere to fall back to, so there's nothing to alert about |
 | Profile switch doesn't change what's enforced | Switching a profile calls `reattach()`/`poke()` — if enforcement looks stale, check the `enforce` global switch is on | Toggle Enforce, or check the log for the flow's "default drifted — restoring" line on the next event |
 | Output volume keeps snapping back when you don't want it to | That output's `hold_volume` is on | Turn off `hold_volume` for that device row in Settings — it will then set the volume once at switch time and leave it alone |
+| Mixer popup doesn't appear over a fullscreen game | Game is running EXCLUSIVE fullscreen, not borderless/windowed | Switch the game to borderless/windowed fullscreen — see "Exclusive-fullscreen limitation" above; the hotkey still fires (system-wide `RegisterHotKey`), only the popup's compositing is affected |
+| Boosting one app doesn't audibly duck the game | No foreground game detected at boost time, so ALL other sessions duck instead of just the game — or the game session wasn't at a nonzero volume to duck from | Check `get_foreground_exe()` returns the game's exe while boosting; confirm the game has an active audio session (`list_app_sessions()`) |
+| Digits/arrows do nothing while the mixer is open | Ephemeral mixer keys failed to register (another app holds one) or the popup closed before the keypress | Check the log for `"mixer key vk=... unavailable — skipped"`; re-summon the popup with the mixer hotkey |
 
 ## References
 - [Architecture.md](../Architecture.md) — threads table, event flow, gotchas

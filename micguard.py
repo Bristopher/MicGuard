@@ -51,6 +51,7 @@ DEFAULT_CONFIG = {
             {"keys": "ctrl+down", "target": "system", "step": -2},
             {"keys": "ctrl+shift+up", "target": "app:Discord.exe", "step": 2},
             {"keys": "ctrl+shift+down", "target": "app:Discord.exe", "step": -2},
+            {"keys": "shift+f2", "target": "mixer", "step": 0},
         ],
     },
     "run_at_startup": True,
@@ -1275,22 +1276,34 @@ async function deleteProfile(){
 }
 
 // ---- hotkeys (persisted on Save; wired to the hotkey engine after that) ----
+function hkTargetLabel(o){
+  if (o === 'system') return 'System volume';
+  if (o === 'active') return 'Active window';
+  if (o === 'mixer') return 'Mixer popup (toggle)';
+  return o.replace(/^app:/, '');
+}
 function hkRowHtml(b, i){
-  const opts = ['system', ...S.sessions.map(x => 'app:' + x)];
+  const opts = ['system', 'active', 'mixer', ...S.sessions.map(x => 'app:' + x)];
   if (b.target && !opts.includes(b.target)) opts.push(b.target);
   const bad = S.hotkeyFailures && S.hotkeyFailures.includes(b.keys);
+  const isMixer = b.target === 'mixer';
   return `<div class="hkrow">
     <input class="hkkeys${bad ? ' hkbad' : ''}" value="${esc(b.keys)}"
       placeholder="press keys&hellip;"${bad ? ' title="In use by another app &mdash; pick a different combo"' : ''}
       spellcheck="false" onkeydown="hkCapture(event,${i})">
     <div class="select-wrap hksel"><select
-      onchange="S.hotkeys.bindings[${i}].target=this.value">${
+      onchange="hkTarget(${i},this.value)">${
       opts.map(o => `<option value="${esc(o)}"${o === b.target ? ' selected' : ''}>${
-        esc(o === 'system' ? 'System volume' : o.replace(/^app:/, ''))}</option>`).join('')
+        esc(hkTargetLabel(o))}</option>`).join('')
     }</select></div>
-    <input class="hkstep" value="${b.step}" maxlength="3" title="Step, &plusmn;1&ndash;10"
+    <input class="hkstep" value="${isMixer ? '—' : b.step}" maxlength="3" title="Step, &plusmn;1&ndash;10"
+      ${isMixer ? 'disabled' : ''}
       oninput="this.value=this.value.replace(/[^0-9-]/g,'')" onchange="hkStep(${i},this)">
     <a class="del" onclick="removeHk(${i})">&#x2715;</a></div>`;
+}
+function hkTarget(i, v){
+  S.hotkeys.bindings[i].target = v;
+  renderHk();
 }
 function renderHk(){
   document.getElementById('hklist').innerHTML =
@@ -2193,13 +2206,14 @@ class App:
                     keys = str(b.get("keys") or "").strip()
                     if not keys:
                         continue  # unfinished capture rows are dropped
+                    target = str(b.get("target") or "system")
                     try:
                         step = int(b.get("step", 2))
                     except (TypeError, ValueError):
                         step = 2
-                    step = max(-10, min(10, step)) or 2
+                    step = 0 if target == "mixer" else (max(-10, min(10, step)) or 2)
                     bindings.append({"keys": keys,
-                                     "target": str(b.get("target") or "system"),
+                                     "target": target,
                                      "step": step})
                 app.cfg["hotkeys"] = {"enabled": bool(hk.get("enabled")),
                                       "bindings": bindings}
