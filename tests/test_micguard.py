@@ -149,6 +149,47 @@ class TestBoostedNudge(unittest.TestCase):
         actions, _ = m.boosted_nudge(self.state, "discord.exe", 10, s, "game.exe")
         self.assertEqual(actions, {"game.exe": 0})
 
+    def test_boost_second_app_restores_first(self):
+        # one boosted exe at a time: starting to boost B while A is boosted
+        # first restores A's victims to their originals, then boosts B fresh
+        s = {"a.exe": 100, "b.exe": 100, "game.exe": 90}
+        m.boosted_nudge(self.state, "a.exe", 10, s, "game.exe")
+        s2 = {"a.exe": 100, "b.exe": 100, "game.exe": 80}   # game ducked live
+        actions, shown = m.boosted_nudge(self.state, "b.exe", 4, s2, "game.exe")
+        self.assertEqual(self.state.boost, {"b.exe": 4})     # only B boosted
+        self.assertEqual(self.state.ducked, {"game.exe": 90})  # TRUE original
+        self.assertEqual(actions, {"game.exe": 86})          # 90 restored, -4
+        self.assertEqual(shown, 104)
+        bindings = [{"keys": "k1", "target": "app:a.exe", "step": 2},
+                    {"keys": "k2", "target": "app:b.exe", "step": 2}]
+        rows = m.build_mixer_rows(bindings, s2, None, self.state, 40)
+        row_a = next(r for r in rows if r["key"] == "app:a.exe")
+        row_b = next(r for r in rows if r["key"] == "app:b.exe")
+        self.assertEqual(row_a["boost"], 0)                  # no phantom boost
+        self.assertEqual(row_b["boost"], 4)
+
+    def test_boost_switch_restores_nonretargeted_victims(self):
+        # A ducked everything (no game); switching to B with a game must
+        # restore the victims B does not re-duck
+        s = {"a.exe": 100, "spotify.exe": 60, "game.exe": 90}
+        m.boosted_nudge(self.state, "a.exe", 10, s, None)
+        s2 = {"a.exe": 100, "b.exe": 100, "spotify.exe": 50, "game.exe": 80}
+        actions, _ = m.boosted_nudge(self.state, "b.exe", 4, s2, "game.exe")
+        self.assertEqual(actions, {"spotify.exe": 60, "game.exe": 86})
+        self.assertEqual(self.state.ducked, {"game.exe": 90})
+        self.assertEqual(self.state.boost, {"b.exe": 4})
+
+    def test_game_without_session_falls_back_to_duck_all(self):
+        # game exe has no live audio session -> duck everything else instead
+        # of no-op ducking a phantom target
+        s = {"discord.exe": 100, "spotify.exe": 60, "chrome.exe": 40}
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", 4, s,
+                                         "game.exe")
+        self.assertEqual(actions, {"spotify.exe": 56, "chrome.exe": 36})
+        self.assertEqual(self.state.ducked,
+                         {"spotify.exe": 60, "chrome.exe": 40})
+        self.assertEqual(shown, 104)
+
 
 class TestBuildMixerRows(unittest.TestCase):
     BINDINGS = [

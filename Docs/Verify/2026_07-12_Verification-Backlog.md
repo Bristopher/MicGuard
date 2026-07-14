@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-14 — added §9 (v1.6: mixer popup, boost-past-100%, active-window hotkey target, settings target dropdown, default `shift+f2` binding)
+**Updated:** 2026-07-14 — §9 extended with the final-review boost-bookkeeping fix round (single boosted app, sessionless-duck fallback, vanish-restore on mixer open)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → v1.6 Task 6 docs commit (2026-07-14) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -203,6 +203,14 @@ exe. None of this substitutes for real in-game/multi-monitor testing below.
    the target dropdown — confirm the step field shows "—" and is disabled/
    unclickable, and Save doesn't error or silently coerce it back to a
    number.
+7. **Boost fix round (final review, 2026-07-14).** Machine-verified: 28/28
+   pytest (single-boost switch, sessionless-game duck fallback), vanish-restore
+   harness (ghost boosted exe → mixer open restores the ducked session and
+   clears the badge), mixer-keys harness, sabotage test. Human checks:
+   (a) boost app A past 100 (game ducks), then boost app B — A's duck should
+   audibly release and only B's boost badge shows; (b) with a boosted app,
+   close it, then open the mixer — the game's volume should already be back
+   to its original level and no stale boost badge renders.
 
 ---
 

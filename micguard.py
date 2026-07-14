@@ -467,17 +467,31 @@ def boosted_nudge(state: BoostState, exe: str, step: int,
     the display value (session + boost, 0..100+MAX_BOOST)."""
     exe = exe.lower()
     game = game_exe.lower() if game_exe else None
+    if game and game not in sessions:
+        game = None          # sessionless game can't be ducked — duck all others
     cur = sessions.get(exe, 0)
     b = state.boost.get(exe, 0)
     actions = {}
 
     if step > 0 and cur >= 100:
+        # one boosted exe at a time: switching to a new exe first restores the
+        # previous boost's victims to their originals (folded into actions),
+        # so the shared `ducked` dict never mixes two boosts' bookkeeping
+        restore = {}
+        if any(k != exe for k in state.boost):
+            restore = dict(state.ducked)
+            actions.update(restore)
+            state.boost.clear()
+            state.ducked.clear()
+            b = 0
         nb = min(MAX_BOOST, b + step)
         if nb != b:
             targets = [game] if game and game != exe else \
                 [t for t in sessions if t != exe]
             for t in targets:
-                state.ducked.setdefault(t, sessions[t] if t in sessions else 0)
+                # a just-restored victim's true level is its restored original,
+                # not the still-ducked pct in `sessions`
+                state.ducked.setdefault(t, restore.get(t, sessions.get(t, 0)))
             state.boost[exe] = nb
             for t, orig in state.ducked.items():
                 actions[t] = max(0, orig - nb)
@@ -1921,8 +1935,11 @@ class App:
             pass
         try:
             if self.hotkeys is not None:
-                self._restore_boost(self.hotkeys)
+                # thread down first — restore must not race a queued WM_HOTKEY
                 self.hotkeys.shutdown()
+                if self.hotkeys.is_alive():
+                    self.hotkeys.join(timeout=1)
+                self._restore_boost(self.hotkeys)
         except Exception:
             pass
         for w in list(webview.windows):
@@ -2749,6 +2766,13 @@ class App:
         _co_initialize()
         sessions = list_app_sessions()
         fg = get_foreground_exe()
+        # vanish-restore: a boosted app that exited must not leave its victims
+        # ducked (or render a dead boost badge) until the next hotkey press —
+        # the mixer refreshes on open and on every key, so catch it here too
+        if self.hotkeys and any(exe not in sessions
+                                for exe in self.hotkeys.boost.boost):
+            self._restore_boost(self.hotkeys)
+            sessions = list_app_sessions()   # re-read the restored levels
         boost = self.hotkeys.boost if self.hotkeys else BoostState()
         system = get_system_volume()
         rows = build_mixer_rows(self.cfg["hotkeys"]["bindings"], sessions, fg,
@@ -2861,11 +2885,12 @@ class App:
             if mgr is None or not mgr.boost.ducked:
                 return
             _co_initialize()
-            for exe, orig in mgr.boost.ducked.items():
+            restored = dict(mgr.boost.ducked)
+            for exe, orig in restored.items():
                 set_app_session(exe, orig)
             mgr.boost.ducked.clear()
             mgr.boost.boost.clear()
-            log.info("boost restored for %s", mgr)
+            log.info("boost restored: %s", restored)
         except Exception as e:
             log.warning("boost restore failed: %s", e)
 
@@ -2877,10 +2902,12 @@ class App:
             self._hide_mixer()   # releases ephemeral keys while the old thread lives
             old, self.hotkeys = self.hotkeys, None
             if old is not None:
-                self._restore_boost(old)
+                # shut the thread down BEFORE restoring — a queued WM_HOTKEY
+                # could otherwise mutate boost/ducked mid-restore (race)
                 old.shutdown()
                 if old.is_alive():
                     old.join(timeout=1)
+                self._restore_boost(old)
             if self.cfg.get("hotkeys", {}).get("enabled"):
                 self.hotkeys = HotkeyManager(self)
                 self.hotkeys.start()
