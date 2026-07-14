@@ -211,6 +211,14 @@ exe. None of this substitutes for real in-game/multi-monitor testing below.
    audibly release and only B's boost badge shows; (b) with a boosted app,
    close it, then open the mixer — the game's volume should already be back
    to its original level and no stale boost badge renders.
+8. **Known UX trap (final-review judgment call): System nudges vs a
+   hold-volume output.** If your active profile has an output with
+   `hold_volume: ON`, a System hotkey/mixer nudge changes the endpoint volume
+   and the Enforcer snaps it back within ~50 ms — the OSD shows the new value,
+   then it reverts. That's `hold_volume` doing its job, but from the mixer it
+   feels like a broken nudge. Try it and decide: acceptable ("hold means
+   hold"), or should a hotkey nudge UPDATE the held target volume instead?
+   Flag it and we'll build the latter.
 
 ---
 
