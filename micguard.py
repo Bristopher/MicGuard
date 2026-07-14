@@ -1456,6 +1456,7 @@ class App:
         self._osd_win = None
         self._osd_timer = None
         self._osd_primed = False        # _make_osd_window resets this too
+        self._osd_h = None              # measured real content height (cached)
         self.hotkeys = None             # HotkeyManager while hotkeys are enabled
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
@@ -2283,15 +2284,22 @@ class App:
         import webview
         app = self
 
+        # min_size below pywebview's default (200, 100): the default floors
+        # the frameless window at 100 px tall — far taller than the ~58 px
+        # of content — which painted a dead strip under the volume bar.
+        # show_osd resizes to the real content height before every show.
         self._osd_win = webview.create_window(
             f"{APP_NAME} OSD", html=OSD_HTML,
             width=OSD_W, height=OSD_H, frameless=True, on_top=True,
-            resizable=False, hidden=True, background_color="#09090b")
+            resizable=False, hidden=True, min_size=(OSD_W, 40),
+            background_color="#09090b")
         self._osd_primed = False
+        self._osd_h = None
 
         def _on_closed():
             app._osd_win = None
             app._osd_primed = False
+            app._osd_h = None
 
         self._osd_win.events.closed += _on_closed
 
@@ -2317,10 +2325,26 @@ class App:
                 self._prime_osd_window()
             self._osd_win.evaluate_js(
                 f"setOsd({json.dumps(str(label))}, {int(percent)})")
+            if self._osd_h is None:
+                # Frameless windows are created smaller than requested AND
+                # floored by min_size, so the real rect never matches OSD_H —
+                # measure the actual content height once and resize() to it
+                # (resize sets the exact outer rect, unlike create). Content
+                # height is constant (one label row + the bar), so cache it;
+                # _make_osd_window resets the cache on (re)create/close.
+                h = self._osd_win.evaluate_js(
+                    "(function(){var b=document.querySelector('.bar');"
+                    "if(!b)return 0;"
+                    "return Math.ceil(b.getBoundingClientRect().bottom"
+                    " + parseFloat(getComputedStyle(document.body).paddingBottom))"
+                    " + 2;})()")  # +2: body border (1px top + bottom)
+                if h:
+                    self._osd_h = int(h)   # cache only a real measurement
+                self._osd_win.resize(OSD_W, self._osd_h or OSD_H)
             screen = webview.screens[0]
             self._show_noactivate(self._osd_win, f"{APP_NAME} OSD",
                                   (screen.width - OSD_W) // 2,
-                                  screen.height - OSD_H - 90)
+                                  screen.height - (self._osd_h or OSD_H) - 90)
             if self._osd_timer:
                 self._osd_timer.cancel()
             self._osd_timer = threading.Timer(1.2, self._hide_osd)
