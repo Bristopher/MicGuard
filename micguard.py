@@ -392,6 +392,143 @@ def adjust_app_volume(exe: str, step: int) -> tuple[str, int] | None:
     return (exe, hit) if hit is not None else None
 
 
+MAX_BOOST = 50
+
+
+def get_foreground_exe() -> str | None:
+    """Exe name of the process owning the foreground window (original case),
+    or None (no window / lookup failure / our own process)."""
+    try:
+        u = ctypes.windll.user32
+        hwnd = u.GetForegroundWindow()
+        if not hwnd:
+            return None
+        pid = ctypes.wintypes.DWORD()
+        u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value or pid.value == os.getpid():
+            return None
+        import psutil  # ships with pycaw
+        return psutil.Process(pid.value).name()
+    except Exception:
+        return None
+
+
+def list_app_sessions() -> dict:
+    """lowercase exe -> session volume 0..100 (max across sessions)."""
+    out = {}
+    try:
+        for s in AudioUtilities.GetAllSessions():
+            if s.Process:
+                exe = s.Process.name().lower()
+                pct = round(s.SimpleAudioVolume.GetMasterVolume() * 100)
+                out[exe] = max(out.get(exe, 0), pct)
+    except Exception as e:
+        log.warning("session enumeration failed: %s", e)
+    return out
+
+
+def set_app_session(exe: str, pct: int) -> bool:
+    """Set every audio session of exe to pct (0..100). True if any matched."""
+    hit = False
+    try:
+        for s in AudioUtilities.GetAllSessions():
+            if s.Process and s.Process.name().lower() == exe.lower():
+                s.SimpleAudioVolume.SetMasterVolume(
+                    max(0.0, min(1.0, pct / 100.0)), None)
+                hit = True
+    except Exception as e:
+        log.warning("set session %s failed: %s", exe, e)
+    return hit
+
+
+class BoostState:
+    """Transient ">100%" bookkeeping. boost: exe -> 0..MAX_BOOST extra percent
+    shown to the user; ducked: exe -> ORIGINAL session pct before ducking.
+    Never persisted (spec decision: boost resets on vanish/restart/quit)."""
+
+    def __init__(self):
+        self.boost = {}
+        self.ducked = {}
+
+
+def boosted_nudge(state: BoostState, exe: str, step: int,
+                  sessions: dict, game_exe: str | None):
+    """PURE decision function for one nudge of `exe` by `step`.
+    sessions: lowercase exe -> current pct. Returns (set_actions, shown_pct):
+    set_actions maps lowercase exe -> pct the caller must apply; shown_pct is
+    the display value (session + boost, 0..100+MAX_BOOST)."""
+    exe = exe.lower()
+    game = game_exe.lower() if game_exe else None
+    cur = sessions.get(exe, 0)
+    b = state.boost.get(exe, 0)
+    actions = {}
+
+    if step > 0 and cur >= 100:
+        nb = min(MAX_BOOST, b + step)
+        if nb != b:
+            targets = [game] if game and game != exe else \
+                [t for t in sessions if t != exe]
+            for t in targets:
+                state.ducked.setdefault(t, sessions[t] if t in sessions else 0)
+            state.boost[exe] = nb
+            for t, orig in state.ducked.items():
+                actions[t] = max(0, orig - nb)
+        return actions, min(100, cur) + state.boost.get(exe, 0)
+
+    if step < 0 and b > 0:
+        nb = max(0, b + step)
+        for t, orig in state.ducked.items():
+            actions[t] = max(0, orig - nb)
+        if nb:
+            state.boost[exe] = nb
+        else:
+            state.boost.pop(exe, None)
+            state.ducked.clear()
+        return actions, min(100, cur) + nb
+
+    new = max(0, min(100, cur + step))
+    actions[exe] = new
+    return actions, new
+
+
+def build_mixer_rows(bindings, sessions, foreground_exe,
+                     state: BoostState, system_pct: int):
+    """Row model for the mixer popup: System, one row per distinct app:<exe>
+    binding target (bindings order), then Active window. pct None = no live
+    session. `chip` = first bound combo for that row's target ('' if none)."""
+    def chip(target):
+        return next((b.get("keys", "") for b in bindings
+                     if b.get("target") == target), "")
+
+    rows = [{"key": "system", "label": "System", "pct": system_pct,
+             "boost": 0, "ducked": 0, "chip": chip("system")}]
+    seen = set()
+    for b in bindings:
+        t = b.get("target", "")
+        if not t.startswith("app:"):
+            continue
+        exe = t[4:]
+        low = exe.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        rows.append({"key": f"app:{low}", "label": exe,
+                     "pct": sessions.get(low),
+                     "boost": state.boost.get(low, 0),
+                     "ducked": max(0, state.ducked[low] - sessions[low])
+                     if low in state.ducked and low in sessions else 0,
+                     "chip": b.get("keys", "")})
+    fg = foreground_exe or "—"
+    low = (foreground_exe or "").lower()
+    rows.append({"key": "active", "label": f"Active window ({fg})",
+                 "pct": sessions.get(low) if low else None,
+                 "boost": state.boost.get(low, 0),
+                 "ducked": max(0, state.ducked[low] - sessions[low])
+                 if low in state.ducked and low in sessions else 0,
+                 "chip": chip("active")})
+    return rows
+
+
 class HotkeyManager(threading.Thread):
     """Global volume hotkeys via RegisterHotKey + a blocking GetMessage loop —
     zero idle cost, no keyboard hook. One instance per enable; App._restart_hotkeys

@@ -92,5 +92,101 @@ class TestParseHotkey(unittest.TestCase):
         self.assertIsNone(m.parse_hotkey(""))
 
 
+class TestBoostedNudge(unittest.TestCase):
+    def setUp(self):
+        self.state = m.BoostState()
+
+    def test_normal_nudge_below_100(self):
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", 2,
+                                         {"discord.exe": 80, "game.exe": 100}, "game.exe")
+        self.assertEqual(actions, {"discord.exe": 82})
+        self.assertEqual(shown, 82)
+        self.assertEqual(self.state.boost, {})
+
+    def test_boost_engages_at_100_and_ducks_game(self):
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", 4,
+                                         {"discord.exe": 100, "game.exe": 90}, "game.exe")
+        self.assertEqual(self.state.boost["discord.exe"], 4)
+        self.assertEqual(self.state.ducked["game.exe"], 90)   # original remembered
+        self.assertEqual(actions, {"game.exe": 86})           # 90 - 4
+        self.assertEqual(shown, 104)
+
+    def test_boost_accumulates_and_clamps_at_max(self):
+        s = {"discord.exe": 100, "game.exe": 90}
+        m.boosted_nudge(self.state, "discord.exe", 48, s, "game.exe")
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", 10, s, "game.exe")
+        self.assertEqual(self.state.boost["discord.exe"], m.MAX_BOOST)
+        self.assertEqual(actions, {"game.exe": 40})            # 90 - 50
+        self.assertEqual(shown, 150)
+
+    def test_nudge_down_unwinds_boost_before_lowering(self):
+        s = {"discord.exe": 100, "game.exe": 90}
+        m.boosted_nudge(self.state, "discord.exe", 10, s, "game.exe")
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", -4, s, "game.exe")
+        self.assertEqual(self.state.boost["discord.exe"], 6)
+        self.assertEqual(actions, {"game.exe": 84})            # 90 - 6, restoring
+        self.assertEqual(shown, 106)
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", -6, s, "game.exe")
+        self.assertEqual(self.state.boost, {})                 # fully unwound
+        self.assertEqual(self.state.ducked, {})                # bookkeeping cleared
+        self.assertEqual(actions, {"game.exe": 90})            # fully restored
+        self.assertEqual(shown, 100)
+
+    def test_below_boost_goes_to_plain_lowering(self):
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", -2,
+                                         {"discord.exe": 100, "game.exe": 90}, "game.exe")
+        self.assertEqual(actions, {"discord.exe": 98})
+        self.assertEqual(shown, 98)
+
+    def test_no_game_ducks_all_other_sessions(self):
+        s = {"discord.exe": 100, "spotify.exe": 60, "chrome.exe": 40}
+        actions, shown = m.boosted_nudge(self.state, "discord.exe", 4, s, None)
+        self.assertEqual(actions, {"spotify.exe": 56, "chrome.exe": 36})
+        self.assertEqual(self.state.ducked, {"spotify.exe": 60, "chrome.exe": 40})
+
+    def test_duck_never_below_zero(self):
+        s = {"discord.exe": 100, "game.exe": 3}
+        actions, _ = m.boosted_nudge(self.state, "discord.exe", 10, s, "game.exe")
+        self.assertEqual(actions, {"game.exe": 0})
+
+
+class TestBuildMixerRows(unittest.TestCase):
+    BINDINGS = [
+        {"keys": "ctrl+up", "target": "system", "step": 2},
+        {"keys": "ctrl+shift+up", "target": "app:Discord.exe", "step": 2},
+        {"keys": "ctrl+shift+down", "target": "app:Discord.exe", "step": -2},
+        {"keys": "shift+f2", "target": "mixer", "step": 0},
+    ]
+
+    def test_rows_system_apps_active(self):
+        state = m.BoostState()
+        rows = m.build_mixer_rows(self.BINDINGS, {"discord.exe": 100}, "BlackOps3.exe",
+                                  state, 40)
+        self.assertEqual(rows[0]["key"], "system")
+        self.assertEqual(rows[0]["pct"], 40)
+        self.assertEqual(rows[1]["key"], "app:discord.exe")
+        self.assertEqual(rows[1]["label"], "Discord.exe")
+        self.assertEqual(rows[1]["chip"], "ctrl+shift+up")     # first bind for that app
+        self.assertEqual(rows[-1]["key"], "active")
+        self.assertIn("BlackOps3.exe", rows[-1]["label"])
+
+    def test_boost_and_duck_shown(self):
+        state = m.BoostState()
+        state.boost["discord.exe"] = 10
+        state.ducked["blackops3.exe"] = 80
+        rows = m.build_mixer_rows(self.BINDINGS, {"discord.exe": 100, "blackops3.exe": 70},
+                                  "BlackOps3.exe", state, 40)
+        disc = next(r for r in rows if r["key"] == "app:discord.exe")
+        self.assertEqual(disc["boost"], 10)
+        active = rows[-1]
+        self.assertEqual(active["ducked"], 10)                 # 80 original - 70 now
+
+    def test_app_without_session_shows_none(self):
+        rows = m.build_mixer_rows(self.BINDINGS, {}, None, m.BoostState(), 40)
+        disc = next(r for r in rows if r["key"] == "app:discord.exe")
+        self.assertIsNone(disc["pct"])
+        self.assertIn("(", rows[-1]["label"])                  # "Active window (—)"
+
+
 if __name__ == "__main__":
     unittest.main()
