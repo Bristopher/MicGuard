@@ -542,6 +542,11 @@ class HotkeyManager(threading.Thread):
         # combos RegisterHotKey refused (held globally by another app) —
         # surfaced in the settings UI; valid once _ready is set
         self.failed: list[str] = []
+        # boost lives on the manager instance (not the App) so a hotkey
+        # restart naturally resets it — App._restore_boost un-ducks the OLD
+        # manager's sessions before a fresh HotkeyManager (and BoostState)
+        # replaces it.
+        self.boost = BoostState()
 
     def start_if_enabled(self):
         if self.app.cfg.get("hotkeys", {}).get("enabled"):
@@ -587,12 +592,41 @@ class HotkeyManager(threading.Thread):
             target, step = binding.get("target", "system"), int(binding.get("step", 2))
             if target == "system":
                 result = adjust_system_volume(step)
+                if result:
+                    self.app.show_osd(result[0], result[1])
+                return
+            if target == "mixer":
+                self.app.toggle_mixer()   # Task 5 implements; Task 3 adds a stub
+                return
+            if target == "active":
+                exe = get_foreground_exe()
+                if not exe:
+                    return
+                label = f"Active — {exe}"
             elif target.startswith("app:"):
-                result = adjust_app_volume(target[4:], step)
+                exe = target[4:]
+                label = exe
             else:
-                result = None
-            if result:
-                self.app.show_osd(result[0], result[1])
+                return
+            sessions = list_app_sessions()
+            if exe.lower() not in sessions:
+                # session vanished (or never existed) while boost was recorded
+                # for this exe — restore ducked sessions before showing the
+                # "no audio" note, per the spec's vanish rule.
+                if self.boost.boost.get(exe.lower()):
+                    self.app._restore_boost(self)
+                self.app.show_osd(label, None)      # "no audio" note
+                return
+            # boost only ever engages once a session is ALREADY at 100 — a
+            # nudge that merely clamps a sub-100 session up to 100 does NOT
+            # start boosting; boost begins on the NEXT press (matches
+            # boosted_nudge's pure-function tests, Task 2 review).
+            game = get_foreground_exe() if target != "active" else None
+            actions, shown = boosted_nudge(self.boost, exe, step, sessions, game)
+            for t, pct in actions.items():
+                set_app_session(t, pct)
+            boost = self.boost.boost.get(exe.lower(), 0)
+            self.app.show_osd(label + (f"  +{boost}" if boost else ""), shown)
         except Exception as e:
             log.warning("hotkey action failed: %s", e)
 
@@ -1404,6 +1438,7 @@ body{color:#fafafa;border:1px solid #27272a;border-radius:0;padding:12px 16px;
      font:600 13px 'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif}
 .row{display:flex;justify-content:space-between;margin-bottom:8px}
 .pct{font-variant-numeric:tabular-nums}
+.pct.dim{opacity:.55;font-weight:400}
 .bar{height:6px;background:#27272a;border-radius:999px;overflow:hidden}
 #fill{height:100%;background:#22c55e;border-radius:999px;transition:width .08s}
 </style></head><body>
@@ -1412,8 +1447,16 @@ body{color:#fafafa;border:1px solid #27272a;border-radius:0;padding:12px 16px;
 <script>
 function setOsd(label, pct){
   document.getElementById('label').textContent = label;
-  document.getElementById('pct').textContent = pct + '%';
-  document.getElementById('fill').style.width = pct + '%';
+  var pctEl = document.getElementById('pct'), fill = document.getElementById('fill');
+  if (pct === null){
+    pctEl.textContent = 'no audio';
+    pctEl.classList.add('dim');
+    fill.style.width = '0%';
+  } else {
+    pctEl.textContent = pct + '%';
+    pctEl.classList.remove('dim');
+    fill.style.width = Math.min(100, pct) + '%';
+  }
 }
 </script></body></html>"""
 
@@ -1711,6 +1754,7 @@ class App:
             self._osd_timer = None
         try:
             if self.hotkeys is not None:
+                self._restore_boost(self.hotkeys)
                 self.hotkeys.shutdown()
         except Exception:
             pass
@@ -2460,8 +2504,9 @@ class App:
                 # hook (App.run / _prime_windows). This is the defensive
                 # fallback for e.g. a window recreated after being closed.
                 self._prime_osd_window()
+            pct_js = "null" if percent is None else int(percent)
             self._osd_win.evaluate_js(
-                f"setOsd({json.dumps(str(label))}, {int(percent)})")
+                f"setOsd({json.dumps(str(label))}, {pct_js})")
             if self._osd_h is None:
                 # Frameless windows are created smaller than requested AND
                 # floored by min_size, so the real rect never matches OSD_H —
@@ -2490,6 +2535,26 @@ class App:
         except Exception as e:
             log.warning("volume OSD failed: %s", e)
 
+    def toggle_mixer(self):
+        log.info("mixer toggle (arrives in the mixer task)")
+
+    def _restore_boost(self, mgr):
+        """Un-duck every session `mgr.boost` lowered and clear its bookkeeping.
+        Never raises — called from the hotkey thread (already CoInitialized)
+        AND from other threads (settings save, quit), so CoInitialize
+        defensively. Idempotent: a no-op once ducked/boost are empty."""
+        try:
+            if mgr is None or not mgr.boost.ducked:
+                return
+            _co_initialize()
+            for exe, orig in mgr.boost.ducked.items():
+                set_app_session(exe, orig)
+            mgr.boost.ducked.clear()
+            mgr.boost.boost.clear()
+            log.info("boost restored for %s", mgr)
+        except Exception as e:
+            log.warning("boost restore failed: %s", e)
+
     def _restart_hotkeys(self):
         """Settings save calls this to apply enable/rebind changes: tear down
         the old manager (a HotkeyManager registers once, at thread start) and
@@ -2497,6 +2562,7 @@ class App:
         try:
             old, self.hotkeys = self.hotkeys, None
             if old is not None:
+                self._restore_boost(old)
                 old.shutdown()
                 if old.is_alive():
                     old.join(timeout=1)
