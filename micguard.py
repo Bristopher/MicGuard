@@ -619,6 +619,8 @@ class HotkeyManager(threading.Thread):
     # per-thread); other threads request via set_mixer_keys → PostThreadMessage.
 
     def _register_mixer_keys(self, u):
+        if getattr(self, "_mixer_ids", None):
+            return  # already held — a double-ON must not orphan registrations
         self._mixer_ids = []
         for hid, mods, vk in MIXER_KEYS:
             if u.RegisterHotKey(None, hid, mods, vk):
