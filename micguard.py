@@ -21,7 +21,7 @@ import webbrowser
 import winreg
 
 APP_NAME = "MicGuard"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 GITHUB_REPO = "Bristopher/MicGuard"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 CONFIG_DIR = os.path.join(os.environ["APPDATA"], APP_NAME)
