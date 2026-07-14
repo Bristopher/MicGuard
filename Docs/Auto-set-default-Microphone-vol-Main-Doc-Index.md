@@ -19,6 +19,7 @@ about doesn't exist.
 | [superpowers/specs/2026-07-13 device-priority-profiles-hotkeys](superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md) | Approved v1.5 design: capture+render priority/fallback lists w/ per-device volumes, profiles, fallback alert popup, volume hotkeys + game-safe OSD |
 | [superpowers/plans/2026-07-13 device-priority-profiles-hotkeys](superpowers/plans/2026-07-13-device-priority-profiles-hotkeys.md) | v1.5 implementation plan — 8 tasks w/ TDD steps (introduces tests/test_micguard.py) |
 | [Features/Device-Priority-Profiles-Hotkeys](Features/Device-Priority-Profiles-Hotkeys.md) | Shipped v1.5 feature doc: capture+render priority lists, profiles, fallback alerts, volume hotkeys + OSD — API surface, config, testing, troubleshooting |
+| [superpowers/specs/2026-07-14 mixer-popup-active-window-boost](superpowers/specs/2026-07-14-mixer-popup-active-window-boost-design.md) | Approved v1.6 design: Shift+F2 gkey-style mixer popup, active-window volume target, Discord boost-by-ducking, OSD height fix |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes
