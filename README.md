@@ -31,15 +31,29 @@ back **the instant** anything touches them — measured restore time ~50 ms.
 
 ## What it does
 
-- 🎯 **Holds your default mic** — if anything changes the default recording
-  device (any role: Default Device *and* Default Communications Device), it's
-  changed back immediately.
+- 🎯 **Holds your default mic AND your default output** — if anything changes
+  the default device (any role: Default Device *and* Default Communications
+  Device), it's changed back immediately, for both capture and render.
+- 🔁 **Priority fallback lists** — rank multiple mics/outputs; if your top
+  pick disconnects, MicGuard falls back to the next one in line and switches
+  straight back the instant your top pick reconnects. No more "Windows picked
+  some random mic and forgot to switch back."
+- 🗂️ **Named profiles** — bundle a mic list + output list under a name (e.g.
+  "Gaming", "Streaming") and switch between them from the tray menu.
 - 🔊 **Holds your mic volume** — BO3, Discord, Windows Update, anything moves
-  the level → restored in ~50 ms. Unmutes too.
+  the level → restored in ~50 ms. Unmutes too. Output volume can be held the
+  same way per-device, or left alone so your volume keys keep working.
+- 🔔 **Fallback alerts** — a small, no-focus-stealing popup tells you when a
+  device drops out and again when it's back, without interrupting whatever
+  you're doing (games included).
+- ⌨️ **Volume hotkeys with an on-screen display** *(off by default)* — global
+  shortcuts for system or per-app volume (e.g. bump Discord without alt-
+  tabbing), with a game-safe OSD that never steals focus.
 - ⚡ **Event-driven, ~0% CPU** — no polling loops. It subscribes to Windows
   Core Audio change events and sleeps otherwise.
 - 🖱️ **Left-click the tray icon** → Settings. Right-click → full menu
-  (pause enforcement, re-apply now, check for updates, uninstall, quit).
+  (pause enforcement, switch profiles, re-apply now, check for updates,
+  uninstall, quit).
 - 🚀 **Start with Windows** via a per-user registry Run entry — no Task
   Scheduler, no services, no admin rights.
 - 🔔 **Updates ask first, never act silently** — it checks GitHub Releases on

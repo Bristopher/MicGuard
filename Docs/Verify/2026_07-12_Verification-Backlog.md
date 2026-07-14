@@ -2,8 +2,8 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-12 — added §6 (v1.4.0: tray-menu flash/anchor fixes, live level meter, hear yourself, mic-swap volume adoption)
-**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `v1.2.0` tag (2026-07-12), all commits reviewed on **2026-07-12** — the repo is one day old; everything shipped is in §1–§3 below. **Next sweep starts from the `v1.2.0` tag.**
+**Updated:** 2026-07-13 — added §7 (v1.5.0: capture+render priority lists, profiles, fallback alerts, volume hotkeys + OSD)
+**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `a58c445` (2026-07-13, v1.5 implementation complete) + this docs commit, all commits reviewed through **2026-07-13** — everything shipped is in §1–§7 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
 
@@ -75,12 +75,82 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 5. **Mic swap:** pick a different mic in the dropdown — the volume slider should jump to that mic's CURRENT volume and Enforce should switch on; "Use recommended settings (85%)" sets the slider back to the AT2020 default. Cancel without saving → nothing changed.
 6. **Sanity around the passthrough:** with Hear yourself ON, check Windows' own mmsys.cpl → mic → Listen tab — "Listen to this device" must remain UNCHECKED (MicGuard never touches it).
 
+## 7. v1.5.0 — device priority lists (capture + render), profiles, fallback alerts, volume hotkeys + OSD (~20 min)
+
+**Shipped:** `c4a3839`..`a58c445` (implementation) + this docs commit
+(v1.5 docs/feature-doc/backlog section), ship date 2026-07-13 — NOT yet
+released (`VERSION` stays `1.4.0` until Bristopher runs `.\release.ps1
+-Version 1.5.0`; this section covers the code as-committed on `main`, ready
+for his hands-on pass). Full design:
+[superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md](../superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md).
+Feature doc: [Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md).
+
+**Machine-verified (Task 8 sweep, 2026-07-13):** `uv run pytest -q` — 15/15
+green (`migrate_config`, `active_profile_lists`, `pick_device`,
+`parse_hotkey`); first-run from a deleted config.json builds a Default
+profile from the real connected mic at its current volume; the real v1.4
+config.json migrates in memory (profiles/active_profile synthesized, dead v1
+keys stripped) with the file on disk untouched (confirmed byte-identical
+after restore); sabotage test restored 42%→85% sub-second; a synthetic
+fake-primary-mic fallback harness confirmed the enforcer falls back to the
+next connected entry and `on_fallback` fires; a hotkey harness confirmed
+`RegisterHotKey`→`WM_HOTKEY`→volume-adjust→OSD round-trip; the frozen exe
+(`pyinstaller --onefile --noconsole --collect-all webview`) launches,
+sabotage-tests clean, and was NOT installed over the real `1.4.0` copy at
+`%LOCALAPPDATA%\Programs\MicGuard` — see the task-8 report for exact command
+output. None of this substitutes for real hardware/game/call testing below.
+
+1. **Real USB unplug/replug mid-call.** With a 2+ mic profile active, unplug
+   the top-priority mic while in a live call/recording — confirm (a) the
+   fallback alert popup appears without stealing focus, (b) the call/game
+   keeps working on the fallback mic at its configured volume, (c)
+   replugging the original mic auto-switches back within a second or two and
+   fires the recovery alert. This is the feature's whole reason for existing
+   — only real hardware can verify the timing and "does it actually save me"
+   feel.
+2. **Profile switching from the tray.** Set up 2+ profiles (e.g. "Gaming",
+   "Streaming") with different mic/output lists — right-click tray → Profiles
+   → click a different one. Confirm the menu shows the active profile marked,
+   the enforced device/volume changes immediately (no restart), and the menu
+   height grows/shrinks sensibly as you switch between profiles with
+   different device-list lengths.
+3. **Hotkeys with a fullscreen game running.** Enable hotkeys in Settings
+   (off by default — flip the master switch), launch a fullscreen (not just
+   borderless) game, press a bound combo. Judgment calls: is the OSD visible
+   at all in exclusive fullscreen (the design doc flags this as a known
+   limit — borderless should be fine, exclusive may not draw it)? Does the
+   game keep input focus (alt-tab should NOT be needed)? Does holding the
+   combo repeat smoothly (plain-modifier registration means auto-repeat) or
+   feel janky?
+4. **Discord hotkey during a real call.** Bind Ctrl+Shift+Up/Down to
+   `app:Discord.exe` (the shipped default), join a real Discord call, press
+   the combo — Discord's own volume slider for that session should move.
+   Confirm it does NOT affect system volume or other apps' sessions.
+5. **Hold-volume-off output not fighting volume keys.** Add an output device
+   to a profile with `hold_volume` OFF, let MicGuard set it once, then use
+   your keyboard/hardware volume keys or the Windows volume mixer to change
+   it — it should stay where you put it (no snap-back). Flip `hold_volume`
+   ON for the same device and confirm it now DOES snap back like a mic.
+6. **v1.4→v1.5 config migration on the installed copy.** When Bristopher
+   actually releases v1.5.0 and it runs against his real, long-lived
+   `%APPDATA%\MicGuard\config.json` (currently v1 shape) — confirm on first
+   launch his existing mic/volume becomes the "Default" profile with nothing
+   lost, Enforce/Start-with-Windows/Check-updates flags carry over untouched,
+   and a subsequent Settings Save writes the file back out in v2 shape.
+7. **Alert popup readability/timing judgment.** Trigger a couple of fallback
+   and recovery alerts back to back — is 8 seconds long enough to read
+   without feeling like it lingers? Is the bottom-right position ever
+   obscured by other apps/taskbar on his monitor setup? Does the wording
+   ("X disconnected — now guarding: Y @ Z%") read naturally?
+
 ---
 
 ## Sweep log (commit ranges reviewed for unverified work)
 
 - 2026-07-12: `4bda0ee` (root) → `v1.1.0` release commit, entire repo history (rewrite day). Everything shipped is §1–§2. Excluded as no-UI plumbing: `.gitignore`, `uv.lock`, docs scaffold content (this docs tree), README wording.
+- 2026-07-13: `c4a3839` (v1.5 Task 1 start) → `a58c445` (v1.5 implementation, all 8 tasks) + this docs commit. Everything shipped is §7. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
 
 ## Changelog (verified items move here)
 
 - 2026-07-12 (machine, not human — listed for the record): volume-sabotage restore 0.05 s (source + frozen exe), first-run autodetect correctness on the AT2020, Run-key write/update, release-API round-trip. Human eyeballs still owed on everything in §1–§2.
+- 2026-07-13 (machine, not human — listed for the record): pytest suite 15/15, first-run Default-profile creation, in-memory v1→v2 migration with on-disk file untouched until save, sabotage test 42%→85%, fake-fallback harness, hotkey harness, frozen-exe smoke. Human eyeballs still owed on everything in §7.

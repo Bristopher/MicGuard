@@ -18,6 +18,7 @@ about doesn't exist.
 | [Development/Release-Notes](Development/Release-Notes.md) | Release-notes templates (update + initial release) and the AI prompt that drafts them from `git log` |
 | [superpowers/specs/2026-07-13 device-priority-profiles-hotkeys](superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md) | Approved v1.5 design: capture+render priority/fallback lists w/ per-device volumes, profiles, fallback alert popup, volume hotkeys + game-safe OSD |
 | [superpowers/plans/2026-07-13 device-priority-profiles-hotkeys](superpowers/plans/2026-07-13-device-priority-profiles-hotkeys.md) | v1.5 implementation plan — 8 tasks w/ TDD steps (introduces tests/test_micguard.py) |
+| [Features/Device-Priority-Profiles-Hotkeys](Features/Device-Priority-Profiles-Hotkeys.md) | Shipped v1.5 feature doc: capture+render priority lists, profiles, fallback alerts, volume hotkeys + OSD — API surface, config, testing, troubleshooting |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes

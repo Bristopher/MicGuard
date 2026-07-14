@@ -1,18 +1,26 @@
 # MicGuard — Architecture
 
 **Status:** ✅ Current — describes the shipped v1.x app
-**Last Updated:** 2026-07-12
+**Last Updated:** 2026-07-13
 
 ## Overview
 
-MicGuard is a single-process Windows tray app that pins the default capture
-device and its recording volume. Windows and games (Black Ops 3 was the
-original offender) silently change both; MicGuard subscribes to Core Audio
-change events and re-asserts the configured state within ~50 ms (measured).
-It is deliberately tiny: **one source file (`micguard.py`, ~600 lines), stdlib
-+ 4 runtime deps, compiled to a single unsigned exe** that friends run with
-zero setup. There is no server, no database, no installer, no Task Scheduler —
-a JSON config, a log file, and one `HKCU\...\Run` registry value.
+MicGuard is a single-process Windows tray app that pins default audio
+devices and their volumes. Windows and games (Black Ops 3 was the original
+offender) silently change both; MicGuard subscribes to Core Audio change
+events and re-asserts the configured state within ~50 ms (measured). It is
+deliberately tiny: **one source file (`micguard.py`, ~2,340 lines as of
+v1.5), stdlib + 4 runtime deps, compiled to a single unsigned exe** that
+friends run with zero setup. There is no server, no database, no installer,
+no Task Scheduler — a JSON config, a log file, and one `HKCU\...\Run`
+registry value.
+
+As of v1.5 (design: [superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md](superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md);
+plan: [superpowers/plans/2026-07-13-device-priority-profiles-hotkeys.md](superpowers/plans/2026-07-13-device-priority-profiles-hotkeys.md))
+the app enforces TWO flows — capture (mics) and render (outputs) — each an
+ordered priority/fallback list with per-device volume, grouped into named
+profiles, plus optional global volume hotkeys with a game-safe on-screen
+display. Full feature detail: [Features/Device-Priority-Profiles-Hotkeys.md](Features/Device-Priority-Profiles-Hotkeys.md).
 
 ## Stack
 
@@ -60,10 +68,22 @@ Runtime footprint on a user's machine:
 | `%LOCALAPPDATA%\Programs\MicGuard\MicGuard.exe` | suggested install location (any path works) |
 | `HKCU\...\Run\MicGuard` | startup entry, only when the setting is on |
 
-## Threads & event flow (the whole design)
+## Threads table (v1.5)
 
-`micguard.py` sections top-to-bottom: Core Audio plumbing → event callbacks →
-config/registry/update/uninstall helpers → `Enforcer` → `App` (tray + settings)
+| Thread | Started by | Lifetime | Owns COM? | Purpose |
+|---|---|---|---|---|
+| main | `main()` | app lifetime | no (until webview.start) | mutex check, `App()` construction, `app.run()` |
+| `Enforcer` (`enforcer`) | `App.run()` | app lifetime, daemon | yes — the only long-lived COM owner | registers `_DeviceCallback` + per-flow `_VolumeCallback`s, drains `wake` queue, re-asserts capture + render priority lists |
+| `HotkeyManager` (`hotkeys`) | `App.run()`/`_restart_hotkeys` iff `cfg["hotkeys"]["enabled"]` | while enabled; replaced (not reused) on rebind/toggle | yes — CoInitialize at thread start, short-lived pointers released before CoUninitialize | `RegisterHotKey` + blocking `GetMessageW` loop; `WM_HOTKEY` → adjust system or per-app session volume → `App.show_osd` |
+| webview main thread | `app.run()` | app lifetime | no | `webview.start(func=self._prime_windows)` owns the GUI message loop; hidden master window keeps it alive |
+| webview worker threads | pywebview, per window | per `js_api` call | defensive CoInitialize | settings/menu/dialog `js_api` handlers |
+| meter pump | `App._start_meter` | while settings window open | defensive CoInitialize | 20 Hz `IAudioMeterInformation.GetPeakValue()` → level bar |
+| `MicMonitor` ("hear yourself") | `App._set_monitor` | while the switch is on | CoInitialize; releases before CoUninitialize | WASAPI passthrough selected mic → speakers; sets `Enforcer.hold_volume` |
+| Alert / OSD hide timers | `notify_fallback` / `show_osd` | transient `threading.Timer` | none (UI only) | auto-hide the fallback popup (8 s) / hotkey OSD (1.2 s) |
+
+`micguard.py` sections top-to-bottom: Core Audio plumbing → `HotkeyManager` →
+event callbacks → config/registry/update/uninstall helpers (incl.
+`migrate_config`) → `Enforcer` → `App` (tray + settings + alert/OSD windows)
 → `main()`.
 
 ```
@@ -71,26 +91,40 @@ main()                                   [main thread]
  ├─ already_running()?  → exit (named mutex "Local\MicGuardSingleton")
  ├─ App() — first run: autodetect_device() picks the mic that is BOTH
  │          default + default-comms (fallback: multimedia default → first
- │          active capture device), volume prefilled from current level
- └─ app.run() → pystray runs DETACHED; webview.start() owns the main thread:
+ │          active capture device), volume prefilled from current level,
+ │          written into the "Default" profile's mics list (config v2)
+ └─ app.run() → pystray runs DETACHED; HotkeyManager starts if enabled;
+     webview.start(func=self._prime_windows) owns the main thread:
+     ├─ _prime_windows runs ONCE the GUI loop is live: primes the alert
+     │   and OSD singleton windows (see "WebView2 no-activate prime" below)
      ├─ hidden master window keeps webview's loop alive for the app's lifetime
      ├─ settings window pre-created HIDDEN (background_color=#09090b) —
      │   open = evaluate_js("refresh()") + show() → ~30 ms, no white flash;
      │   Cancel/Save/✕ hide() it, never destroy
+     ├─ alert + OSD windows: persistent hidden singletons, shown via
+     │   `_show_noactivate` (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+     │   SW_SHOWNOACTIVATE) so games/fullscreen apps keep input focus
      ├─ dialogs = short-lived frameless windows, created from any thread
-     └─ quit = destroy every window → start() returns → icon+enforcer stopped
+     └─ quit = destroy every window → start() returns → icon+enforcer+hotkeys stopped
 
 Enforcer (threading.Thread, daemon)      [owns all LONG-LIVED COM objects]
  ├─ comtypes.CoInitialize()
  ├─ registers _DeviceCallback  (IMMNotificationClient: default-device /
- │                              device-state changes)
- ├─ registers _VolumeCallback  (IAudioEndpointVolumeCallback on the target mic)
+ │                              device-state changes, both flows)
+ ├─ registers TWO _VolumeCallback instances (IAudioEndpointVolumeCallback),
+ │  one per flow, re-attached whenever the enforced device of that flow changes
  └─ loop: wake.get(timeout=15)   # 15 s watchdog is the only "polling"
-     └─ _enforce():
-         1. any of the 3 roles (console/multimedia/comms) drifted?
-            → IPolicyConfig.SetDefaultEndpoint(device_id, each role)
-         2. |current − target| > 0.005? → SetMasterVolumeLevelScalar
-         3. muted? → unmute
+     └─ _enforce():  for each flow (capture, render):
+         1. pick_device(entries, active_ids) — highest-priority CONNECTED
+            device in that flow's priority list, else None
+         2. device changed since last pass (availability-driven)?
+            → on_fallback(flow, lost_name, new_entry_or_None) → App.notify_fallback
+         3. default endpoint != want.id?
+            → IPolicyConfig.SetDefaultEndpoint(device_id) for all 3 roles
+         4. volume: mics always held (snap-back); outputs held only if that
+            device's `hold_volume` flag is set, else set ONCE at switch time
+            so the system volume keys/mixer stay usable
+         5. muted (capture only)? → unmute
 
 Callbacks (arrive on arbitrary COM threads)
  └─ do NOTHING but wake.put("volume"|"default"|"state")   ← hard rule
@@ -100,6 +134,20 @@ UI (webview)
  │   they CoInitialize defensively before touching Core Audio
  └─ update check / uninstall run in their own threads and block on
      App._dialog (threading.Event answered by the dialog's js_api)
+
+HotkeyManager (threading.Thread, daemon) [own Win32 message loop, no polling]
+ ├─ comtypes.CoInitialize(); RegisterHotKey(None, id, mods, vk) per enabled
+ │  binding (plain mods, no MOD_NOREPEAT, so holding the combo auto-repeats)
+ ├─ blocking GetMessageW loop — zero idle cost; WM_HOTKEY → _fire(binding)
+ │   ├─ target "system": adjusts the default render endpoint's volume
+ │   └─ target "app:<exe>": pycaw AudioUtilities.GetAllSessions(), matches
+ │       process name case-insensitively, adjusts SimpleAudioVolume.MasterVolume
+ ├─ every fire calls App.show_osd(label, percent) — never raises even if the
+ │   OSD window itself fails (hotkeys must keep working)
+ └─ shutdown(): waits for `_ready` (thread may not have registered yet) before
+    PostThreadMessageW(WM_QUIT) — posting into an unregistered thread would
+    hang forever; App._restart_hotkeys replaces the whole instance on
+    enable/rebind rather than mutating a running one
 
 Settings-scoped live audio (exist ONLY while the settings window is visible)
  ├─ meter pump thread: polls IAudioMeterInformation.GetPeakValue() at 20 Hz
@@ -115,14 +163,35 @@ Settings-scoped live audio (exist ONLY while the settings window is visible)
      closing settings can't clobber a listen the user enabled elsewhere.
 ```
 
-**The enforcement loop in words:** anything that touches the mic fires a COM
-callback → the callback drops a token on `Enforcer.wake` (a `queue.Queue`) →
-the enforcer drains the burst, re-asserts device + volume + mute, and goes
-back to sleep. Our own corrective `SetMasterVolumeLevelScalar` fires the
-callback again, but the next `_enforce` pass is a no-op because the value now
-matches — that's the recursion guard. A 15-second `queue.get` timeout doubles
-as a watchdog pass for any missed event; that one COM read is the app's entire
-idle cost.
+**The enforcement loop in words:** anything that touches either flow fires a
+COM callback → the callback drops a token on `Enforcer.wake` (a
+`queue.Queue`) → the enforcer drains the burst and, per flow, re-asserts
+device + volume + mute, and goes back to sleep. Our own corrective
+`SetMasterVolumeLevelScalar` fires the callback again, but the next
+`_enforce` pass is a no-op because the value now matches — that's the
+recursion guard. A 15-second `queue.get` timeout doubles as a watchdog pass
+for any missed event; that one COM read (times two flows) is the app's
+entire idle cost.
+
+**Two volume listeners, not one:** `Enforcer._volume_coms`/`_volume_cbs` are
+now keyed by flow (`"capture"`/`"render"`). `_attach_volume_listener(key, id)`
+unregisters the old callback and registers a fresh one whenever the enforced
+device for that flow changes (profile switch, fallback, recovery) — the
+render listener only fires drift-restore when that output's `hold_volume` is
+on; otherwise its volume is set once at switch time and left alone so the
+user's volume keys/mixer work normally.
+
+**Config v2 + the permanent adapter:** `DEFAULT_CONFIG` now nests `profiles`
+(each `{name, mics: [{id,name,volume}], outputs: [{id,name,volume,hold_volume}]}`),
+`active_profile`, `hotkeys` (master switch + binding list), plus the existing
+`enforce`/`notify_fallback`/`run_at_startup`/`check_updates` flags. Old
+v1 configs (`device_id`/`device_name`/`volume` at the root) are converted by
+`migrate_config(raw)` inside `load_config()`, BEFORE the `DEFAULT_CONFIG |
+raw` merge — this is a permanent, deliberate exception to "dict-merge is the
+whole migration system" (see [Dynamic-Settings.md](Dynamic-Settings.md)).
+The migration is idempotent and only touches the file on disk when
+`save_config()` next runs (e.g. any settings Save) — an unmodified v1.4
+install stays v1 shape on disk until then, which is correct and expected.
 
 **Update flow (user-consented, never silent):** on launch (if
 `check_updates`) and via tray → *Check for updates*: fetch
@@ -187,15 +256,47 @@ the rename back). Version comparison is `parse_version` on
   mechanism: new keys added to `DEFAULT_CONFIG` just work for old installs.
 - The exe is **unsigned** → SmartScreen warning on friends' PCs (documented in
   README). Signing is a known open gap.
+- **WebView2 no-activate windows composite solid black without a "prime."** A
+  window shown ONLY via the `SW_SHOWNOACTIVATE` path in `_show_noactivate`
+  (the alert popup, the hotkey OSD) never gets its first real paint from
+  WebView2's swapchain — it stays black even after the HTML has loaded. Fix:
+  `App._prime_window` runs one normal (activating) show → 150 ms → hide cycle
+  BEFORE the window is ever shown no-activate, and it must wait on
+  `win.events.loaded` first — priming before the page has loaded doesn't
+  count; the swapchain never presents and the window stays black permanently
+  even once the page does load (found in the Task 7 fallback-alert harness,
+  2026-07-13). Priming happens once, up front, via `webview.start(func=
+  self._prime_windows)`, off the hot path of the first real popup; a
+  `_alert_primed`/`_osd_primed` flag (reset whenever the window is recreated
+  or closed) makes a missed/stale prime self-correct defensively at the next
+  `notify_fallback`/`show_osd` call.
+- **`RegisterHotKey` swallows the combo system-wide** — while MicGuard holds
+  e.g. Ctrl+Up, no other app on the PC can bind or receive that combo, and if
+  another app already owns it registration just fails (logged, not fatal).
+  This is exactly why hotkeys ship with `hotkeys.enabled = False` by default:
+  the feature is opt-in, not a silent global keyboard grab.
+- **`HotkeyManager.shutdown()` must wait for `_ready` before posting
+  `WM_QUIT`.** A freshly-started manager may not have called `RegisterHotKey`
+  /entered `GetMessageW` yet; posting `WM_QUIT` to a thread ID that hasn't
+  reached the message loop is silently dropped, and the old thread then
+  blocks in `GetMessageW` forever — it never exits and the rebind path leaks
+  a thread holding the old hotkey registrations. `self._ready.wait(timeout=1)`
+  before `PostThreadMessageW` fixes it (bit the settings rebind path in
+  testing, 2026-07-13).
 
 ## Honest gaps
 
-- **No test suite.** Verification is the manual smoke commands in
-  [AI-Development-Guide.md](AI-Development-Guide.md) §6 plus the human backlog
-  in [Verify/2026_07-12_Verification-Backlog.md](Verify/2026_07-12_Verification-Backlog.md).
-  Core Audio behavior is hard to unit-test; a fake-`AudioUtilities` seam would
-  be the starting point if tests are ever added.
 - **No ruff config yet** — the standing Astral-toolchain preference applies,
   but `[tool.ruff]` hasn't been added to `pyproject.toml`.
+- **Test coverage is pure-function only.** `tests/test_micguard.py`
+  (pytest, `uv run pytest -q`) covers `migrate_config`, `active_profile_lists`,
+  `pick_device`, and `parse_hotkey` — everything COM-free and hardware-free.
+  Core Audio behavior (enforcement, fallback, hotkey firing, the OSD/alert
+  windows) still has no automated coverage; it's verified live via the
+  manual smoke commands in [AI-Development-Guide.md](AI-Development-Guide.md)
+  §6 plus the human backlog in
+  [Verify/2026_07-12_Verification-Backlog.md](Verify/2026_07-12_Verification-Backlog.md).
+  A fake-`AudioUtilities` seam is the natural next step if COM-level tests are
+  ever added.
 - `.myArchive/` and `.history/` are untracked local-only history; the GitHub
   repo starts at the v1.0.0 rewrite (`4bda0ee`).

@@ -4,11 +4,13 @@
 working on this codebase.
 
 **Status:** 📌 MUST READ before generating any code
-**Last Updated:** 2026-07-12
+**Last Updated:** 2026-07-13
 
-This is a ~600-line single-file Windows tray app (`micguard.py`). The rules are
-few but they are all real — each one traces to a bug or a deliberate product
-decision. Read [Architecture.md](Architecture.md) for how the pieces fit.
+This is a single-file Windows tray app (`micguard.py`, ~2,340 lines as of
+v1.5 — grew well past the original "~600 lines" from device priority
+lists/profiles/hotkeys). The rules are few but they are all real — each one
+traces to a bug or a deliberate product decision. Read
+[Architecture.md](Architecture.md) for how the pieces fit.
 
 ---
 
@@ -125,10 +127,21 @@ raise                      # an unhandled exception in the Enforcer kills enforc
 - User-visible outcomes go through `self._notify(...)` (tray toast) or a
   tkinter dialog, never a log line alone, when the user initiated the action.
 
-### 6. Testing — no suite yet (honest gap); verify by running
+### 6. Testing — pytest for pure logic (as of v1.5); live smoke for everything COM-touching
 
-There is **no automated test suite**. Do not invent references to one. Until
-one exists, every change to audio/enforcement logic is verified live:
+`tests/test_micguard.py` now EXISTS — unittest-style classes run by pytest,
+covering every pure/hardware-free function (`migrate_config`,
+`active_profile_lists`, `pick_device`, `parse_hotkey`). Run it FIRST, before
+anything else:
+
+```powershell
+uv run pytest -q                                 # 15 tests, must be green — run this FIRST
+```
+
+There is still **no automated coverage for Core Audio behavior** (enforcement,
+fallback, hotkey firing, alert/OSD windows) — that gap is real, don't invent
+references to a broader suite. Every change to audio/enforcement logic is
+still verified live:
 
 ```powershell
 # core plumbing smoke (enumerate, defaults, volume, set-default):
@@ -145,9 +158,9 @@ Get-Content $env:APPDATA\MicGuard\micguard.log -Tail 10
 
 Every shipped change also adds its human-verify items to
 [Verify/2026_07-12_Verification-Backlog.md](Verify/2026_07-12_Verification-Backlog.md)
-in the same change. If a test suite is ever added: `tests/test_micguard.py`,
-unittest-style classes run by pytest (per Preferred-Stack), with a fake
-`AudioUtilities` seam.
+in the same change. New pure functions belong in `tests/test_micguard.py`
+(unittest classes, `uv run pytest -q`); anything that needs real COM/hardware
+stays a manual harness script until a fake-`AudioUtilities` seam exists.
 
 ---
 
@@ -165,6 +178,7 @@ unittest-style classes run by pytest (per Preferred-Stack), with a fake
 10. ❌ **Blocking the pystray thread** — tray menu handlers that do slow work (network, dialogs) spawn a thread, like every existing handler does
 11. ❌ **Letting the GC release COM pointers after `CoUninitialize`** → access-violation crash. Short-lived audio threads (MicMonitor, the settings meter pump) null every COM local + `gc.collect()` BEFORE `CoUninitialize` (bit us 2026-07-12 building hear-yourself)
 12. ❌ **Naming a Thread attribute `_stop`** → shadows `threading.Thread._stop()` and breaks `join()`/`is_alive()` with `'Event' object is not callable`. Stop events are named `_stop_evt`
+13. ❌ **Showing a no-activate (`WS_EX_NOACTIVATE`) WebView2 window without priming it first** → the window composites solid black forever, even after its HTML has loaded. Fix: one real activating show→hide cycle via `App._prime_window`, run once at GUI-loop start (`webview.start(func=self._prime_windows)`), and it must `win.events.loaded.wait(...)` before that cycle — priming before the page loads doesn't count and never self-corrects. Applies to the fallback alert and hotkey OSD windows; any future no-activate popup needs the same treatment (found 2026-07-13 building the fallback alert)
 
 ## ✅ Checklist for New Features
 
