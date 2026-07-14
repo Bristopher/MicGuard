@@ -367,13 +367,33 @@ def parse_hotkey(combo: str):
     return (mods, vk) if vk is not None else None
 
 
-def adjust_system_volume(step: int) -> tuple[str, int] | None:
-    """Default render endpoint ± step%. Returns (label, new %)."""
+def _default_render_volume():
+    """IAudioEndpointVolume for the default render endpoint — the shared
+    read/write path for adjust_system_volume and get_system_volume."""
     enumerator = AudioUtilities.GetDeviceEnumerator()
     imm = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender.value,
                                              ERole.eMultimedia.value)
-    vol = cast(imm.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None),
+    return cast(imm.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None),
                POINTER(IAudioEndpointVolume))
+
+
+class MONITORINFO(ctypes.Structure):
+    """Win32 MONITORINFO — used by App._mixer_position to place the mixer
+    popup on the monitor the cursor is currently over (multi-monitor rigs)."""
+    _fields_ = [("cbSize", ctypes.wintypes.DWORD),
+                ("rcMonitor", ctypes.wintypes.RECT),
+                ("rcWork", ctypes.wintypes.RECT),
+                ("dwFlags", ctypes.wintypes.DWORD)]
+
+
+def get_system_volume() -> int:
+    """Current default render endpoint volume, 0..100."""
+    return round(_default_render_volume().GetMasterVolumeLevelScalar() * 100)
+
+
+def adjust_system_volume(step: int) -> tuple[str, int] | None:
+    """Default render endpoint ± step%. Returns (label, new %)."""
+    vol = _default_render_volume()
     new = max(0.0, min(1.0, vol.GetMasterVolumeLevelScalar() + step / 100.0))
     vol.SetMasterVolumeLevelScalar(new, None)
     return "System", round(new * 100)
@@ -1460,6 +1480,78 @@ function setOsd(label, pct){
 }
 </script></body></html>"""
 
+MIXER_W = 380
+
+# No existing window (menu/alert/osd) uses transparent=True — they all rely
+# on background_color="#09090b" for a flash-free frameless window. Matching
+# that precedent here rather than probing transparent+rounded-corners
+# compositing: the window itself is a plain dark rectangle, and .card (with
+# its own border-radius) sits flush against it, so the rounded corners still
+# read visually even though the outer window rect is square.
+MIXER_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{color-scheme:dark}
+html,body{background:#09090b}
+body{color:#fafafa;padding:0;user-select:none;overflow:hidden;
+     font:13px/1.4 'Segoe UI Variable Text','Segoe UI',system-ui,sans-serif}
+.card{background:rgba(9,9,11,.92);border:1px solid #27272a;border-radius:14px;
+      padding:10px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.hdr{display:flex;justify-content:space-between;align-items:center;
+     padding:2px 6px 8px;color:#a1a1aa;font-size:11.5px}
+.hdr .t{font-weight:700;font-size:13px;color:#fafafa}
+.row{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:9px;
+     border:1px solid transparent;margin-bottom:4px}
+.row.sel{background:#18181b;border-color:#3f3f46}
+.badge{width:20px;height:20px;border-radius:5px;background:#27272a;flex:none;
+       display:flex;align-items:center;justify-content:center;
+       font:700 11px Consolas,monospace;color:#a1a1aa}
+.row.sel .badge{background:#22c55e;color:#052e16}
+.info{flex:1;min-width:0}
+.name{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;
+      text-overflow:ellipsis}
+.name .duck{color:#f59e0b;font-weight:500;font-size:11px;margin-left:6px}
+.bar{height:5px;background:#27272a;border-radius:999px;margin-top:4px;
+     position:relative;overflow:hidden}
+.bar .fill{height:100%;background:#22c55e;border-radius:999px}
+.bar .over{position:absolute;top:0;right:0;height:100%;background:#4ade80}
+.pct{width:44px;text-align:right;font:600 12px Consolas,monospace;flex:none}
+.pct .b{color:#4ade80}
+.pct.na{color:#52525b;font-size:10.5px}
+.chip{flex:none;font:600 9.5px Consolas,monospace;color:#71717a;
+      background:#18181b;border:1px solid #27272a;border-radius:5px;
+      padding:2px 5px;text-transform:uppercase}
+.foot{padding:6px 6px 2px;color:#52525b;font-size:10px;text-align:center}
+</style></head><body>
+<div class="card">
+  <div class="hdr"><span class="t">Volume mixer</span><span id="hint"></span></div>
+  <div id="rows"></div>
+  <div class="foot">Esc closes &middot; 1&ndash;9 pick &middot; &#8593;&#8595; adjust</div>
+</div>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function setMixer(model){
+  document.getElementById('rows').innerHTML = model.rows.map((r, i) => {
+    const pctHtml = r.pct === null
+      ? `<span class="pct na">no audio</span>`
+      : `<span class="pct">${r.pct + (r.boost || 0)}%${r.boost ? '<span class="b">*</span>' : ''}</span>`;
+    const fill = r.pct === null ? 0 : Math.min(100, r.pct);
+    const over = r.boost ? Math.min(33, r.boost * 0.66) : 0;   // boost zone sliver
+    return `<div class="row${i === model.selected ? ' sel' : ''}">
+      <span class="badge">${i + 1}</span>
+      <span class="info"><span class="name">${esc(r.label)}${
+        r.ducked ? `<span class="duck">ducked &minus;${r.ducked}%</span>` : ''}</span>
+        <span class="bar"><span class="fill" style="width:${fill}%"></span>${
+          over ? `<span class="over" style="width:${over}px"></span>` : ''}</span></span>
+      ${pctHtml}
+      ${r.chip ? `<span class="chip">${esc(r.chip)}</span>` : ''}
+    </div>`;
+  }).join('');
+  document.body.dataset.rows = model.rows.length;
+}
+</script></body></html>"""
+
 
 # --------------------------------------------------------------------------
 # Enforcement engine
@@ -1637,6 +1729,11 @@ class App:
         self._osd_timer = None
         self._osd_primed = False        # _make_osd_window resets this too
         self._osd_h = None              # measured real content height (cached)
+        self._mixer_win = None
+        self._mixer_timer = None
+        self._mixer_primed = False      # _make_mixer_window resets this too
+        self._mixer_sel = 0
+        self._mixer_rows = []           # last build_mixer_rows() output (Task 5 reads it)
         self.hotkeys = None             # HotkeyManager while hotkeys are enabled
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
@@ -1719,6 +1816,7 @@ class App:
         self._make_menu_window(hidden=True)
         self._make_alert_window()
         self._make_osd_window()
+        self._make_mixer_window()
         self.hotkeys = HotkeyManager(self)
         self.hotkeys.start_if_enabled()
         webview.start(func=self._prime_windows)
@@ -1752,6 +1850,9 @@ class App:
         if self._osd_timer:
             self._osd_timer.cancel()
             self._osd_timer = None
+        if self._mixer_timer:
+            self._mixer_timer.cancel()
+            self._mixer_timer = None
         try:
             if self.hotkeys is not None:
                 self._restore_boost(self.hotkeys)
@@ -2391,10 +2492,14 @@ class App:
     def _prime_osd_window(self, *_args):
         self._prime_window(self._osd_win, "_osd_primed")
 
+    def _prime_mixer_window(self, *_args):
+        self._prime_window(self._mixer_win, "_mixer_primed")
+
     def _prime_windows(self, *_args):
         """webview.start's single func hook: prime every no-activate window."""
         self._prime_alert_window()
         self._prime_osd_window()
+        self._prime_mixer_window()
 
     def _hide_alert(self):
         try:
@@ -2535,8 +2640,112 @@ class App:
         except Exception as e:
             log.warning("volume OSD failed: %s", e)
 
+    # ---- volume mixer popup (no-focus, like the alert/OSD) ----
+
+    def _make_mixer_window(self, hidden=True):
+        import webview
+        app = self
+
+        self._mixer_win = webview.create_window(
+            f"{APP_NAME} Mixer", html=MIXER_HTML,
+            width=MIXER_W, height=300, frameless=True, on_top=True,
+            resizable=False, hidden=hidden, min_size=(MIXER_W, 100),
+            background_color="#09090b")
+        self._mixer_primed = False
+
+        def _on_closed():
+            app._mixer_win = None
+            app._mixer_primed = False
+
+        self._mixer_win.events.closed += _on_closed
+
+    def _mixer_visible(self) -> bool:
+        u = ctypes.windll.user32
+        hwnd = u.FindWindowW(None, f"{APP_NAME} Mixer")
+        return bool(hwnd and u.IsWindowVisible(hwnd))
+
     def toggle_mixer(self):
-        log.info("mixer toggle (arrives in the mixer task)")
+        """Callable from the HotkeyManager thread (Shift+F2) — never raises,
+        a broken mixer must not take the hotkey loop down with it."""
+        try:
+            if self._mixer_visible():
+                self._hide_mixer()
+                return
+            self._show_mixer()
+        except Exception as e:
+            log.warning("mixer toggle failed: %s", e)
+
+    def _refresh_mixer(self):
+        """Rebuilds the row model from live audio state and pushes it to the
+        page. Stashes self._mixer_rows so Task 5's key handler (number keys /
+        up-down) can act on the same rows just shown without re-querying."""
+        _co_initialize()
+        sessions = list_app_sessions()
+        fg = get_foreground_exe()
+        boost = self.hotkeys.boost if self.hotkeys else BoostState()
+        system = get_system_volume()
+        rows = build_mixer_rows(self.cfg["hotkeys"]["bindings"], sessions, fg,
+                                boost, system)
+        self._mixer_rows = rows
+        self._mixer_win.evaluate_js(
+            f"setMixer({json.dumps({'rows': rows, 'selected': self._mixer_sel})})")
+
+    def _mixer_position(self, h):
+        """Bottom-center of the monitor the cursor is on, 80 px up from the
+        work-area bottom (gkey-style placement)."""
+        u = ctypes.windll.user32
+        pt = ctypes.wintypes.POINT()
+        u.GetCursorPos(ctypes.byref(pt))
+        MONITOR_DEFAULTTONEAREST = 2
+        mon = u.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if mon and u.GetMonitorInfoW(mon, ctypes.byref(mi)):
+            mx, my = mi.rcWork.left, mi.rcWork.top
+            mw = mi.rcWork.right - mi.rcWork.left
+            mh = mi.rcWork.bottom - mi.rcWork.top
+        else:
+            import webview
+            s = webview.screens[0]
+            mx, my, mw, mh = 0, 0, s.width, s.height
+        return mx + (mw - MIXER_W) // 2, my + mh - h - 80
+
+    def _show_mixer(self):
+        _co_initialize()
+        if self._mixer_win is None:
+            self._make_mixer_window(hidden=True)
+        if not self._mixer_primed:
+            # Priming normally happens up front via webview.start's func hook
+            # (App.run / _prime_windows). This is the defensive fallback for
+            # e.g. a window recreated after being closed.
+            self._prime_mixer_window()
+        self._mixer_sel = 0
+        self._refresh_mixer()                        # builds model + setMixer
+        # height to content, then place bottom-center of the CURSOR's monitor
+        h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
+        self._mixer_win.resize(MIXER_W, int(h))
+        x, y = self._mixer_position(int(h))
+        self._show_noactivate(self._mixer_win, f"{APP_NAME} Mixer", x, y)
+        self._arm_mixer_timer()                      # Task 5 also resets it per key
+
+    def _arm_mixer_timer(self):
+        if self._mixer_timer:
+            self._mixer_timer.cancel()
+        self._mixer_timer = threading.Timer(6.0, self._hide_mixer)
+        self._mixer_timer.daemon = True
+        self._mixer_timer.start()
+
+    def _hide_mixer(self):
+        # Task 5 seam: release any held ephemeral keys (number/arrow) here
+        # before hiding, once key-hold state exists.
+        if self._mixer_timer:
+            self._mixer_timer.cancel()
+            self._mixer_timer = None
+        try:
+            if self._mixer_win:
+                self._mixer_win.hide()
+        except Exception:
+            pass
 
     def _restore_boost(self, mgr):
         """Un-duck every session `mgr.boost` lowered and clear its bookkeeping.
