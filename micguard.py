@@ -1047,6 +1047,10 @@ function renderHk(){
   document.getElementById('sw_hotkeys').checked = !!S.hotkeys.enabled;
 }
 // combo capture: focus the field and press keys; Escape clears
+// whitelist mirrors parse_hotkey()'s _VKS + single alpha/digit support —
+// an unsupported main key leaves the field unchanged rather than storing junk
+const HK_MAIN_KEYS = new Set(['up', 'down', 'left', 'right', 'space', 'tab',
+  'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12']);
 function hkCapture(e, i){
   e.preventDefault();
   if (e.key === 'Escape'){ S.hotkeys.bindings[i].keys = ''; e.target.value = ''; return; }
@@ -1054,8 +1058,10 @@ function hkCapture(e, i){
   let k = e.key.toLowerCase();
   if (k === ' ') k = 'space';
   if (k.startsWith('arrow')) k = k.slice(5);
+  const isSingleAlnum = k.length === 1 && /[a-z0-9]/.test(k);
+  if (!HK_MAIN_KEYS.has(k) && !isSingleAlnum) return;   // unsupported main key: leave field unchanged
   const combo = (e.ctrlKey ? 'ctrl+' : '') + (e.altKey ? 'alt+' : '')
-              + (e.shiftKey ? 'shift+' : '') + (e.metaKey ? 'meta+' : '') + k;
+              + (e.shiftKey ? 'shift+' : '') + (e.metaKey ? 'win+' : '') + k;
   S.hotkeys.bindings[i].keys = combo;
   e.target.value = combo;
 }
@@ -1155,6 +1161,8 @@ hr{border:none;border-top:1px solid #27272a;margin:5px 4px}
 <hr>
 <div class="item quit" onclick="pywebview.api.quit()"><span>Quit MicGuard</span></div>
 <script>
+const esc = s => String(s).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function refreshMenu(){
   const s = await pywebview.api.get_state();
   document.getElementById('ver').textContent = 'v' + s.version;
@@ -1162,12 +1170,16 @@ async function refreshMenu(){
   document.getElementById('sw').classList.toggle('on', s.enforce);
   const box = document.getElementById('profiles');
   box.innerHTML = s.profiles.length > 1 ? '<hr>' + s.profiles.map(p =>
-    `<div class="item" onclick="pywebview.api.set_profile(${JSON.stringify(p)})">
-       <span>${p.replace(/</g,'&lt;')}</span>
+    `<div class="item" data-name="${esc(p)}">
+       <span>${esc(p)}</span>
        ${p === s.active ? '<span style="color:#22c55e">&#9679;</span>' : ''}
      </div>`).join('') : '';
   window._menuH = document.body.scrollHeight + 2;
 }
+document.getElementById('profiles').addEventListener('click', e => {
+  const row = e.target.closest('[data-name]');
+  if (row) pywebview.api.set_profile(row.dataset.name);
+});
 window.addEventListener('pywebviewready', refreshMenu);
 window.addEventListener('blur', () => pywebview.api.hide_menu());
 </script></body></html>"""
@@ -1345,7 +1357,6 @@ class Enforcer(threading.Thread):
         # availability-driven change (not first pass) -> alert
         if prev is not None and prev.get("id") != want.get("id") and self.on_fallback:
             self.on_fallback(key, prev.get("name"), want)
-        first_claim = self.enforced[key] is None or prev.get("id") != want.get("id")
         self.enforced[key] = want
         for role in (ERole.eMultimedia, ERole.eCommunications, ERole.eConsole):
             if get_default_endpoint_id(flow, role) != want["id"]:
@@ -1373,7 +1384,7 @@ class Enforcer(threading.Thread):
                 com.SetMasterVolumeLevelScalar(target, None)
             if key == "capture" and com.GetMute():
                 com.SetMute(0, None)
-        elif first_claim and want["id"] not in self._set_once_done:
+        elif want["id"] not in self._set_once_done:
             com.SetMasterVolumeLevelScalar(target, None)   # set once at switch time
             self._set_once_done.add(want["id"])
 
