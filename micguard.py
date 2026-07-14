@@ -399,19 +399,6 @@ def adjust_system_volume(step: int) -> tuple[str, int] | None:
     return "System", round(new * 100)
 
 
-def adjust_app_volume(exe: str, step: int) -> tuple[str, int] | None:
-    """Every audio session of exe (case-insensitive) ± step% — the same
-    control as that app's sndvol slider. None if the app has no session."""
-    hit = None
-    for s in AudioUtilities.GetAllSessions():
-        if s.Process and s.Process.name().lower() == exe.lower():
-            sv = s.SimpleAudioVolume
-            new = max(0.0, min(1.0, sv.GetMasterVolume() + step / 100.0))
-            sv.SetMasterVolume(new, None)
-            hit = round(new * 100)
-    return (exe, hit) if hit is not None else None
-
-
 MAX_BOOST = 50
 
 
@@ -549,6 +536,16 @@ def build_mixer_rows(bindings, sessions, foreground_exe,
     return rows
 
 
+# Thread messages App posts to the hotkey loop to register/unregister the
+# mixer's ephemeral keys ON the manager thread (RegisterHotKey is per-thread).
+WM_APP_MIXER_ON, WM_APP_MIXER_OFF = 0x8001, 0x8002
+
+# Ephemeral keys held only while the mixer popup is visible — BARE keys
+# (no modifier): ids 100-108 = digits 1-9, 109 = up, 110 = down, 111 = esc.
+MIXER_KEYS = ([(100 + i, 0, 0x31 + i) for i in range(9)]           # 1..9
+              + [(109, 0, 0x26), (110, 0, 0x28), (111, 0, 0x1B)])  # up, down, esc
+
+
 class HotkeyManager(threading.Thread):
     """Global volume hotkeys via RegisterHotKey + a blocking GetMessage loop —
     zero idle cost, no keyboard hook. One instance per enable; App._restart_hotkeys
@@ -567,6 +564,8 @@ class HotkeyManager(threading.Thread):
         # manager's sessions before a fresh HotkeyManager (and BoostState)
         # replaces it.
         self.boost = BoostState()
+        # ids of currently-registered mixer keys — owned by the manager thread
+        self._mixer_ids: list[int] = []
 
     def start_if_enabled(self):
         if self.app.cfg.get("hotkeys", {}).get("enabled"):
@@ -594,8 +593,15 @@ class HotkeyManager(threading.Thread):
             self._ready.set()
             msg = ctypes.wintypes.MSG()
             while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-                if msg.message == 0x0312 and msg.wParam in actions:  # WM_HOTKEY
-                    self._fire(actions[msg.wParam])
+                if msg.message == 0x0312:                # WM_HOTKEY
+                    if msg.wParam >= 100:
+                        self._mixer_hotkey(msg.wParam)
+                    elif msg.wParam in actions:
+                        self._fire(actions[msg.wParam])
+                elif msg.message == WM_APP_MIXER_ON:
+                    self._register_mixer_keys(u)
+                elif msg.message == WM_APP_MIXER_OFF:
+                    self._unregister_mixer_keys(u)
         except Exception as e:
             log.warning("hotkey loop died: %s", e)
         finally:
@@ -604,8 +610,46 @@ class HotkeyManager(threading.Thread):
                     u.UnregisterHotKey(None, n)
                 except Exception:
                     pass
+            self._unregister_mixer_keys(u)   # loop-death cleanup
             gc.collect()
             comtypes.CoUninitialize()
+
+    # ---- mixer ephemeral keys (digits/arrows/Esc) ----
+    # Register/unregister happen ONLY on this thread (RegisterHotKey is
+    # per-thread); other threads request via set_mixer_keys → PostThreadMessage.
+
+    def _register_mixer_keys(self, u):
+        self._mixer_ids = []
+        for hid, mods, vk in MIXER_KEYS:
+            if u.RegisterHotKey(None, hid, mods, vk):
+                self._mixer_ids.append(hid)
+            else:
+                log.info("mixer key vk=0x%x unavailable — skipped", vk)  # gkey rule
+
+    def _unregister_mixer_keys(self, u):
+        for hid in getattr(self, "_mixer_ids", []):
+            try:
+                u.UnregisterHotKey(None, hid)
+            except Exception:
+                pass
+        self._mixer_ids = []
+
+    def set_mixer_keys(self, on: bool):
+        """Thread-safe: ask the manager thread to grab/release the mixer's
+        ephemeral keys. No-op if the loop is not running."""
+        if self._tid and self.is_alive():
+            ctypes.windll.user32.PostThreadMessageW(
+                self._tid, WM_APP_MIXER_ON if on else WM_APP_MIXER_OFF, 0, 0)
+
+    def _mixer_hotkey(self, hid):
+        if 100 <= hid <= 108:
+            self.app._mixer_key(("row", hid - 100))
+        elif hid == 109:
+            self.app._mixer_key(("nudge", 2))
+        elif hid == 110:
+            self.app._mixer_key(("nudge", -2))
+        elif hid == 111:
+            self.app._mixer_key(("close", 0))
 
     def _fire(self, binding):
         try:
@@ -1856,9 +1900,10 @@ class App:
         if self._osd_timer:
             self._osd_timer.cancel()
             self._osd_timer = None
-        if self._mixer_timer:
-            self._mixer_timer.cancel()
-            self._mixer_timer = None
+        try:
+            self._hide_mixer()   # releases ephemeral keys before manager teardown
+        except Exception:
+            pass
         try:
             if self.hotkeys is not None:
                 self._restore_boost(self.hotkeys)
@@ -2736,7 +2781,9 @@ class App:
         self._mixer_win.resize(MIXER_W, int(h))
         x, y = self._mixer_position(int(h))
         self._show_noactivate(self._mixer_win, f"{APP_NAME} Mixer", x, y)
-        self._arm_mixer_timer()                      # Task 5 also resets it per key
+        self._arm_mixer_timer()                      # each key press re-arms it
+        if self.hotkeys:
+            self.hotkeys.set_mixer_keys(True)
 
     def _arm_mixer_timer(self):
         if self._mixer_timer:
@@ -2746,8 +2793,10 @@ class App:
         self._mixer_timer.start()
 
     def _hide_mixer(self):
-        # Task 5 seam: release any held ephemeral keys (number/arrow) here
-        # before hiding, once key-hold state exists.
+        # release the ephemeral keys FIRST — the popup must never hide while
+        # digits/arrows are still swallowed globally
+        if self.hotkeys:
+            self.hotkeys.set_mixer_keys(False)
         if self._mixer_timer:
             self._mixer_timer.cancel()
             self._mixer_timer = None
@@ -2756,6 +2805,36 @@ class App:
                 self._mixer_win.hide()
         except Exception:
             pass
+
+    def _mixer_key(self, action):
+        """Runs on the hotkey thread. Selection, nudge, close — never raises."""
+        try:
+            kind, val = action
+            if kind == "close":
+                self._hide_mixer()
+                return
+            if kind == "row":
+                if val < len(self._mixer_rows):
+                    self._mixer_sel = val
+            elif kind == "nudge":
+                row = self._mixer_rows[self._mixer_sel]
+                if row["key"] == "system":
+                    adjust_system_volume(val)
+                else:
+                    exe = (get_foreground_exe() if row["key"] == "active"
+                           else row["label"])
+                    if exe:
+                        sessions = list_app_sessions()
+                        if exe.lower() in sessions:
+                            boost = self.hotkeys.boost if self.hotkeys else BoostState()
+                            game = get_foreground_exe() if row["key"] != "active" else None
+                            actions, _ = boosted_nudge(boost, exe, val, sessions, game)
+                            for t, pct in actions.items():
+                                set_app_session(t, pct)
+            self._refresh_mixer()
+            self._arm_mixer_timer()
+        except Exception as e:
+            log.warning("mixer key failed: %s", e)
 
     def _restore_boost(self, mgr):
         """Un-duck every session `mgr.boost` lowered and clear its bookkeeping.
@@ -2779,6 +2858,7 @@ class App:
         the old manager (a HotkeyManager registers once, at thread start) and
         start a fresh one only if hotkeys are enabled. Never raises."""
         try:
+            self._hide_mixer()   # releases ephemeral keys while the old thread lives
             old, self.hotkeys = self.hotkeys, None
             if old is not None:
                 self._restore_boost(old)
