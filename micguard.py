@@ -2703,6 +2703,10 @@ class App:
         pt = ctypes.wintypes.POINT()
         u.GetCursorPos(ctypes.byref(pt))
         MONITOR_DEFAULTTONEAREST = 2
+        # HMONITOR is pointer-sized; ctypes' default c_int restype would
+        # truncate it on x64 and silently break cursor-monitor placement
+        u.MonitorFromPoint.restype = ctypes.wintypes.HMONITOR
+        u.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
         mon = u.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
         mi = MONITORINFO()
         mi.cbSize = ctypes.sizeof(MONITORINFO)
