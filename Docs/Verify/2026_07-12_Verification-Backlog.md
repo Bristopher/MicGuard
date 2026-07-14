@@ -2,8 +2,8 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-14 — §9 extended with the final-review boost-bookkeeping fix round (single boosted app, sessionless-duck fallback, vanish-restore on mixer open)
-**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → v1.6 Task 6 docs commit (2026-07-14) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
+**Updated:** 2026-07-14 — sweep advanced through `03d6e59` (boost fix round `3c11052` + v1.6.0 pre-stamp); §9 header refreshed: 1.6.0 test build is INSTALLED, release gate open
+**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `03d6e59` (2026-07-14, v1.6.0 pre-stamp) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
 
@@ -68,7 +68,7 @@ How to use: work top-down. When you verify an item, delete it (or move it to the
 **Shipped:** `v1.4.0` release commits on 2026-07-12 — fixes the two bugs you reported (menu appearing for ~100 ms then vanishing = the taskbar reclaiming foreground triggering the blur-to-close; menu corner ~43 px off the cursor = pywebview frameless windows being smaller than their requested size), plus three settings-window features: a live level bar under the mic dropdown, a "Hear yourself" switch (in-app WASAPI mic→speaker passthrough with live volume preview; enforcement holds off while it's on), and mic-swap behavior (choosing a different mic adopts THAT mic's current volume, keeps Enforce on, and a "Use recommended settings (85%)" link is always available). Also fixed en route: a COM-release-after-CoUninitialize access-violation crash and a `Thread._stop` shadowing bug.
 **Machine-verified:** menu bottom-left corner == cursor exact (0,0 offset); early blur (≤0.5 s) survives, later blur hides; meter bar pumps live peaks; mic_changed returns the device's real current volume; monitor thread starts/stops cleanly ×3, live preview moved the real device to 40% and snapped back after stop; settings screenshot; sabotage test restored 47%→85% with the app running.
 
-1. **The one item that can only be tested by you, right now:** your installed copy is v1.3.2 — Check for updates → accept → the app should blink and come back as v1.4.0 with **no "Failed to load Python DLL" error box**. This one action verifies both §5.1 (the rename-swap updater) and delivers everything below.
+1. **Rename-swap updater end-to-end** *(pointer updated 2026-07-14: the installed copy is now the 1.6.0 test build, so the consent dialog + swap can only fire on the FIRST RELEASE AFTER 1.6.0 ships — Check for updates → accept → the app blinks and comes back as the new version with **no "Failed to load Python DLL" error box**. This one action verifies §5.1 too.)*
 2. **Right-click the tray icon** — menu pops with its bottom-left corner exactly at the cursor and STAYS (the flash bug); click elsewhere → it closes; near the screen edges it flips instead of clipping.
 3. **Live meter:** open Settings, talk — the bar under the mic dropdown should dance with your voice, and follow the dropdown selection if you pick another mic.
 4. **Hear yourself:** flip the switch, speak — you hear your mic through your speakers (small delay is normal for shared-mode WASAPI; judge if it's acceptable). Drag the volume slider while talking — loudness follows live, no snap-back fight. Close settings → playback stops, volume returns to the configured target. Judgment: latency + whether "off when settings closes" feels right.
@@ -90,10 +90,11 @@ Also per your request: **Save no longer closes the window** — green "Saved ✓
 ## 7. v1.5.0 — device priority lists (capture + render), profiles, fallback alerts, volume hotkeys + OSD (~20 min)
 
 **Shipped:** `c4a3839`..`a58c445` (implementation) + this docs commit
-(v1.5 docs/feature-doc/backlog section), ship date 2026-07-13 — NOT yet
-released (`VERSION` stays `1.4.0` until Bristopher runs `.\release.ps1
--Version 1.5.0`; this section covers the code as-committed on `main`, ready
-for his hands-on pass). Full design:
+(v1.5 docs/feature-doc/backlog section), ship date 2026-07-13 — never
+released standalone: v1.5 ships to the world inside the 1.6.0 release
+(installed test builds 1.5.0 → 1.6.0 already carry it locally; this section
+covers the code as-committed on `main`, ready for the hands-on pass).
+Full design:
 [superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md](../superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md).
 Feature doc: [Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md).
 
@@ -157,14 +158,20 @@ output. None of this substitutes for real hardware/game/call testing below.
 
 ## 9. v1.6 — mixer popup, boost-past-100%, active-window hotkey target (~15 min)
 
-**Shipped:** `67ac40d` (v1.5/pre-mixer head) → the v1.6 settings/docs commit on
-`main`, ship date 2026-07-14 — NOT yet released (`VERSION` stays `1.5.0`
-until `.\release.ps1 -Version 1.6.0` runs). Full detail: [Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md)
+**Shipped:** `cc1b023`..`03d6e59` on `main` (implementation `f881406`/`6125ef4`/
+`c5d7ff8`/`a0c2896`/`bf0d908`/`4b8b788`/`67ac40d`, docs `3eb0be9`, boost fix
+round `3c11052`, v1.6.0 pre-stamp `03d6e59`), ship date 2026-07-14 — NOT yet
+released, but `VERSION` is pre-stamped `1.6.0` and that exact build is
+INSTALLED at `%LOCALAPPDATA%\Programs\MicGuard` for this hands-on pass
+(`.\release.ps1` Enter-accept publishes exactly 1.6.0 on Bristopher's go).
+Full detail: [Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md)
 §"Mixer popup & boost (v1.6)".
 
-**Machine-verified (Task 6 sweep, 2026-07-14):** `uv run pytest -q` — 25/25
-green (adds `TestBoostedNudge`, `TestBuildMixerRows`, session helpers on top
-of the v1.5 15); fresh `DEFAULT_CONFIG` contains the `shift+f2`→`mixer`
+**Machine-verified (Task 6 sweep + final-review fix round, 2026-07-14):**
+`uv run pytest -q` — 28/28 green (adds `TestBoostedNudge`, `TestBuildMixerRows`, session helpers, and
+the 3 fix-round cases on top of the v1.5 15); the installed frozen 1.6.0
+build logs `MicGuard v1.6.0 starting (frozen=True)` and passed the sabotage
+test live (43%→85% sub-second); fresh `DEFAULT_CONFIG` contains the `shift+f2`→`mixer`
 binding while the real `%APPDATA%\MicGuard\config.json` is untouched
 (byte-identical hash before/after); settings harness confirms the hotkey
 target dropdown lists System volume/Active window/Mixer popup (toggle),
@@ -226,7 +233,8 @@ exe. None of this substitutes for real in-game/multi-monitor testing below.
 
 - 2026-07-12: `4bda0ee` (root) → `v1.1.0` release commit, entire repo history (rewrite day). Everything shipped is §1–§2. Excluded as no-UI plumbing: `.gitignore`, `uv.lock`, docs scaffold content (this docs tree), README wording.
 - 2026-07-13: `c4a3839` (v1.5 Task 1 start) → `a58c445` (v1.5 implementation, all 8 tasks) + this docs commit. Everything shipped is §7. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
-- 2026-07-14: `67ac40d` (v1.5/pre-mixer head) → v1.6 Task 6 docs commit (mixer popup, boost, active target, settings targets, default `shift+f2` binding, all 5 v1.6 implementation tasks). Everything shipped is §9. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
+- 2026-07-14: `cc1b023` (v1.6 Task 1 start) → `3eb0be9` (Task 6 docs: mixer popup, boost, active target, settings targets, default `shift+f2` binding, all 5 v1.6 implementation tasks). Everything shipped is §9.
+- 2026-07-14 (later): `3c11052` (boost-bookkeeping fix round, covered by §9.7) → `03d6e59` (v1.6.0 pre-stamp + §9.8, no user-facing behavior beyond the version string) + this docs commit. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
 
 ## Changelog (verified items move here)
 
