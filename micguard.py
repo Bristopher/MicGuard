@@ -674,7 +674,7 @@ class HotkeyManager(threading.Thread):
             if target == "system":
                 result = adjust_system_volume(step)
                 if result:
-                    self.app.show_osd(result[0], result[1])
+                    self.app._volume_feedback(result[0], result[1])
                 return
             if target == "mixer":
                 self.app.toggle_mixer()   # Task 5 implements; Task 3 adds a stub
@@ -696,7 +696,7 @@ class HotkeyManager(threading.Thread):
                 # "no audio" note, per the spec's vanish rule.
                 if self.boost.boost.get(exe.lower()):
                     self.app._restore_boost(self)
-                self.app.show_osd(label, None)      # "no audio" note
+                self.app._volume_feedback(label, None)   # "no audio" note
                 return
             # boost only ever engages once a session is ALREADY at 100 — a
             # nudge that merely clamps a sub-100 session up to 100 does NOT
@@ -707,7 +707,7 @@ class HotkeyManager(threading.Thread):
             for t, pct in actions.items():
                 set_app_session(t, pct)
             boost = self.boost.boost.get(exe.lower(), 0)
-            self.app.show_osd(label + (f"  +{boost}" if boost else ""), shown)
+            self.app._volume_feedback(label + (f"  +{boost}" if boost else ""), shown)
         except Exception as e:
             log.warning("hotkey action failed: %s", e)
 
@@ -2774,6 +2774,17 @@ class App:
         u = ctypes.windll.user32
         hwnd = u.FindWindowW(None, f"{APP_NAME} Mixer")
         return bool(hwnd and u.IsWindowVisible(hwnd))
+
+    def _volume_feedback(self, label, percent):
+        """Hotkey volume changes visualize on whichever surface is up: while
+        the mixer popup is open its rows repaint in place (stacking the OSD on
+        top of it left the mixer showing stale numbers — Bristopher,
+        2026-07-15); otherwise the normal OSD shows."""
+        if self._mixer_visible():
+            self._refresh_mixer()
+            self._arm_mixer_timer()
+        else:
+            self.show_osd(label, percent)
 
     def toggle_mixer(self):
         """Callable from the HotkeyManager thread (Shift+F2) — never raises,

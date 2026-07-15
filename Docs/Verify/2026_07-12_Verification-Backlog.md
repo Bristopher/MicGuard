@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-15 — v1.6.0 RELEASED; §10 added ("check now" update link in Settings, pre-stamped 1.6.1 test build)
+**Updated:** 2026-07-15 — v1.6.0 RELEASED; §10 added/extended: "check now" update link, mixer-repaint-on-hotkey fix, versioned build archive (pre-stamped 1.6.1 test build)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `03d6e59` (2026-07-14, v1.6.0 pre-stamp) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -247,6 +247,19 @@ quiet mode; SETTINGS_HTML contains the link/msg/CSS.
    "Update check failed (offline?)", no crash, window stays responsive.
 3. When the NEXT release exists, clicking it should pop the normal centered
    consent dialog; declining leaves no inline message.
+4. **Hotkey nudges repaint the open mixer (your 2026-07-15 report).** Root
+   cause: pressing your regular volume hotkeys (ctrl+↑/↓ etc.) while the
+   Shift+F2 mixer was open took the `_fire` path, which showed the OSD and
+   never refreshed the mixer — so the popup sat there with stale numbers.
+   Now, while the mixer is visible, any hotkey volume change repaints the
+   mixer rows in place (and re-arms its 6 s timer) INSTEAD of stacking the
+   OSD on top of it. Verify: open the mixer, press ctrl+↑ — the System row's
+   number/bar must move with each press, no OSD appears; close the mixer,
+   press ctrl+↑ again — the OSD is back. Also confirm the mixer's own ↑/↓
+   (with a row selected by digit) still updates live as before.
+5. **Versioned build archive (release.ps1).** Next release should leave a
+   copy at `Releases\v<ver>\MicGuard-<ver>.exe` (git-ignored) while the
+   GitHub asset stays named exactly `MicGuard.exe`.
 
 ---
 

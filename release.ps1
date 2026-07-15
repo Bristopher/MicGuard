@@ -93,6 +93,15 @@ uv run pyinstaller --onefile --noconsole --name MicGuard `
     --icon assets\icon.ico --collect-all webview micguard.py
 if (-not (Test-Path dist\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard.exe' }
 
+# ── Archive a versioned copy (howler-style Releases\vX.Y.Z\) ─────────────────
+# dist\MicGuard.exe gets overwritten by every build; keep each release's exe
+# under Releases\ (git-ignored) so old builds stay reproducible on disk. The
+# GitHub asset stays exactly `MicGuard.exe` — the in-app updater requires it.
+$archiveDir = Join-Path $PSScriptRoot "Releases\v$new"
+New-Item -ItemType Directory -Force $archiveDir | Out-Null
+Copy-Item dist\MicGuard.exe (Join-Path $archiveDir "MicGuard-$new.exe") -Force
+Write-Host "  Archived -> Releases\v$new\MicGuard-$new.exe"
+
 # ── Commit, tag, publish ─────────────────────────────────────────────────────
 git add micguard.py pyproject.toml
 # the stamp may be a no-op when the version was pre-bumped for a test build

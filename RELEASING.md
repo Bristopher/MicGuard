@@ -25,7 +25,9 @@ That's it. The script:
    releasing exactly that).
 3. Stamps the chosen version into `micguard.py` + `pyproject.toml`.
 4. Rebuilds `dist\MicGuard.exe` (PyInstaller onefile, no console, shield icon,
-   `--collect-all webview` for the WebView2 UI).
+   `--collect-all webview` for the WebView2 UI) and archives a versioned copy
+   at `Releases\vX.Y.Z\MicGuard-X.Y.Z.exe` (git-ignored) so every released
+   build stays on disk after `dist\` gets overwritten.
 5. Commits `Release vX.Y.Z`, creates an annotated tag, pushes branch + tag.
 6. Publishes a GitHub release with the exe attached
    (`gh release create vX.Y.Z dist\MicGuard.exe`).
