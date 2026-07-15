@@ -21,7 +21,7 @@ import webbrowser
 import winreg
 
 APP_NAME = "MicGuard"
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 GITHUB_REPO = "Bristopher/MicGuard"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 CONFIG_DIR = os.path.join(os.environ["APPDATA"], APP_NAME)
@@ -1022,6 +1022,9 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .gh{margin-right:auto;align-self:center;color:#71717a;font-size:12.5px;
     text-decoration:none;cursor:pointer}
 .gh:hover{color:#fafafa;text-decoration:underline}
+.chknow{color:#71717a;text-decoration:underline}
+.chknow:hover{color:#fafafa}
+#updmsg{margin-left:6px}
 #savemsg{flex:1;min-width:0;align-self:center;text-align:right;
       font-size:12.5px;font-weight:600;color:#22c55e;
       opacity:0;transition:opacity .3s;white-space:nowrap;overflow:hidden;
@@ -1108,7 +1111,8 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 </div>
 <div class="switchrow">
   <div><div class="lab">Check for updates on launch</div>
-       <div class="hint">Always asks before installing anything</div></div>
+       <div class="hint">Always asks before installing anything &mdash;
+         <a class="chknow" href="javascript:void(0)" onclick="checkUpd()">check now</a><span id="updmsg"></span></div></div>
   <label class="switch"><input type="checkbox" id="sw_updates"><span class="knob"></span></label>
 </div>
 <div class="switchrow">
@@ -1129,6 +1133,20 @@ const hear = document.getElementById('sw_hear');
 let S = null, recommended = 85, promptMode = null, lastTargetId = null;
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// manual update check — result shows inline next to the link; a found
+// update takes the normal consent-dialog path (empty string comes back)
+let updT = null;
+async function checkUpd(){
+  const m = document.getElementById('updmsg');
+  m.style.color = '#a1a1aa'; m.textContent = 'checking…';
+  let r = '';
+  try { r = await pywebview.api.check_updates(); }
+  catch(e){ r = 'Update check failed'; }
+  m.style.color = /failed/i.test(r) ? '#f59e0b' : '#22c55e';
+  m.textContent = r || '';
+  clearTimeout(updT);
+  updT = setTimeout(() => { m.textContent = ''; }, 8000);
+}
 function listOf(flow){ return flow === 'out' ? S.outputs : S.mics; }
 // the slider / meter / hear-yourself all target the first CONNECTED mic —
 // the one the Enforcer will actually hold
@@ -1958,9 +1976,11 @@ class App:
     def _manual_update_check(self):
         self._update_check(quiet=False)
 
-    def _update_check(self, quiet: bool):
+    def _update_check(self, quiet: bool) -> str:
         """Never updates on its own: finds a newer release, asks the user,
-        and if installing fails points them at the release page instead."""
+        and if installing fails points them at the release page instead.
+        Returns a short status string so inline callers (the settings
+        window's "check now" link) can show the outcome without a toast."""
         try:
             release = fetch_latest_release()
             latest = parse_version(release.get("tag_name", ""))
@@ -1968,23 +1988,23 @@ class App:
             log.info("update check failed: %s", e)
             if not quiet:
                 self._notify("Update check failed (offline?)")
-            return
+            return "Update check failed (offline?)"
         if not latest or latest <= parse_version(VERSION):
             if not quiet:
                 self._notify(f"Up to date (v{VERSION})")
-            return
+            return f"Up to date (v{VERSION})"
         tag = release.get("tag_name")
         if not self._dialog(
             "askyesno",
             f"{APP_NAME} {tag} is available (you have v{VERSION}).\n\n"
             "Update now? MicGuard will restart itself.",
         ):
-            return
+            return ""
         if not IS_FROZEN:
             self._dialog("info", "Running from source — update with git pull.\n\n"
                                  "Opening the release page.")
             webbrowser.open(RELEASES_URL)
-            return
+            return ""
         try:
             if not apply_update(release):
                 raise RuntimeError("release has no .exe asset")
@@ -1999,6 +2019,7 @@ class App:
                 "MicGuard.exe with the downloaded one and run it.",
             )
             webbrowser.open(RELEASES_URL)
+        return ""
 
     def _dialog(self, kind: str, message: str, yes: str = "Yes", no: str = "No"):
         """Frameless webview dialog; blocks the calling thread until answered.
@@ -2257,6 +2278,12 @@ class App:
 
             def open_github(self_api):
                 webbrowser.open(f"https://github.com/{GITHUB_REPO}")
+
+            def check_updates(self_api):
+                # blocks this webview worker thread until the check (and any
+                # consent dialog) resolves; quiet=True suppresses the tray
+                # toast — the returned string shows inline in the settings row
+                return app._update_check(quiet=True)
 
             def cancel(self_api):
                 app._settings_closing()

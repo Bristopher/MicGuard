@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-14 — sweep advanced through `03d6e59` (boost fix round `3c11052` + v1.6.0 pre-stamp); §9 header refreshed: 1.6.0 test build is INSTALLED, release gate open
+**Updated:** 2026-07-15 — v1.6.0 RELEASED; §10 added ("check now" update link in Settings, pre-stamped 1.6.1 test build)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `03d6e59` (2026-07-14, v1.6.0 pre-stamp) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -226,6 +226,27 @@ exe. None of this substitutes for real in-game/multi-monitor testing below.
    feels like a broken nudge. Try it and decide: acceptable ("hold means
    hold"), or should a hotkey nudge UPDATE the held target volume instead?
    Flag it and we'll build the latter.
+
+## 10. v1.6.1 — "check now" update link in Settings (~1 min)
+
+**Shipped:** this commit, ship date 2026-07-15 — NOT yet released; `VERSION`
+pre-stamped `1.6.1` and installed as a test build. Requested after v1.6.0
+shipped: a manual update check reachable from the Settings window (the tray
+menu item was the only trigger). It's a "check now" link inside the "Check
+for updates on launch" row; the result shows inline next to the link instead
+of a tray toast (`_update_check` now returns a status string; quiet mode).
+
+**Machine-verified:** 28/28 pytest; harness confirms offline → "Update check
+failed (offline?)", up-to-date → "Up to date (vX.Y.Z)", update-available →
+consent dialog fires and declining returns "" — all with zero toasts in
+quiet mode; SETTINGS_HTML contains the link/msg/CSS.
+
+1. Open Settings → click **check now** in the update row — expect a brief
+   grey "checking…" then green "Up to date (v1.6.1)", fading after ~8 s.
+2. Kill your network (or block github.com) and click it again — amber
+   "Update check failed (offline?)", no crash, window stays responsive.
+3. When the NEXT release exists, clicking it should pop the normal centered
+   consent dialog; declining leaves no inline message.
 
 ---
 
