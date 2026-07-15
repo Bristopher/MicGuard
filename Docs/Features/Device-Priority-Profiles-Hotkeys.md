@@ -64,7 +64,7 @@ flag is set, else set once at switch time).
 - ✅ First pytest suite (`tests/test_micguard.py`, 15 tests) covering every
   pure function this feature introduced
 - ✅ (v1.6) Mixer popup — a gkey-style volume mixer summoned by a dedicated
-  hotkey target (`mixer`, default `shift+f2` on fresh installs), with
+  hotkey target (`mixer`, default `shift+f3` on fresh installs — was `shift+f2` until 1.6.1; Ubisoft's overlay owns shift+f2), with
   boost-past-100% for the active window or a named app session; see "Mixer
   popup & boost" below
 - ✅ (v1.6) `active` hotkey target — adjusts whatever window currently has
@@ -86,7 +86,7 @@ flag is set, else set once at switch time).
 
 ## Mixer popup & boost (v1.6)
 
-A `shift+f2`-style hotkey (target `mixer`) pops a small, gkey-style volume
+A `shift+f3`-style hotkey (target `mixer`) pops a small, gkey-style volume
 mixer instead of adjusting one target directly. It lists `System`, one row
 per distinct `app:<exe>` binding, then `Active window (<exe>)`; digits 1-9
 select a row, up/down nudge it, Esc closes it. The popup is a persistent
@@ -129,7 +129,7 @@ useful for a single always-adjust-current-app binding. The mixer's own
 "Active window" row does the same lookup at popup-refresh time, so it tracks
 alt-tabs while the popup is open.
 
-**Default binding:** `shift+f2` → `mixer` ships in `DEFAULT_CONFIG` for fresh
+**Default binding:** `shift+f3` → `mixer` ships in `DEFAULT_CONFIG` for fresh
 installs only. Existing users' `hotkeys.bindings` arrays are never mutated by
 an update (config migration is additive-merge only at the top level — see
 Dynamic-Settings.md) — add it manually via Settings → Hotkeys → **+ Add** if

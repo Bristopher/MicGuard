@@ -271,6 +271,10 @@ quiet mode; SETTINGS_HTML contains the link/msg/CSS.
    minimize it (volume still changes — check by ear); switch the same game
    to borderless and confirm the popups are back. Judgment: is silent
    suppression OK in exclusive mode, or do you want a tray toast fallback?
+7. **Mixer default rebound `shift+f2` → `shift+f3`** (your call — Ubisoft's
+   overlay owns shift+f2). `DEFAULT_CONFIG`, README, feature doc, and your
+   live config all updated. Verify shift+f3 toggles the mixer and shift+f2
+   is free for Ubisoft again.
 
 ---
 

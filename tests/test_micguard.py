@@ -196,7 +196,7 @@ class TestBuildMixerRows(unittest.TestCase):
         {"keys": "ctrl+up", "target": "system", "step": 2},
         {"keys": "ctrl+shift+up", "target": "app:Discord.exe", "step": 2},
         {"keys": "ctrl+shift+down", "target": "app:Discord.exe", "step": -2},
-        {"keys": "shift+f2", "target": "mixer", "step": 0},
+        {"keys": "shift+f3", "target": "mixer", "step": 0},
     ]
 
     def test_rows_system_apps_active(self):

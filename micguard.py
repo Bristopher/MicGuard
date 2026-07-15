@@ -51,7 +51,8 @@ DEFAULT_CONFIG = {
             {"keys": "ctrl+down", "target": "system", "step": -2},
             {"keys": "ctrl+shift+up", "target": "app:Discord.exe", "step": 2},
             {"keys": "ctrl+shift+down", "target": "app:Discord.exe", "step": -2},
-            {"keys": "shift+f2", "target": "mixer", "step": 0},
+            # shift+f3, not f2 — Ubisoft's overlay owns shift+f2 (2026-07-15)
+            {"keys": "shift+f3", "target": "mixer", "step": 0},
         ],
     },
     "run_at_startup": True,
@@ -2809,7 +2810,7 @@ class App:
             self.show_osd(label, percent)
 
     def toggle_mixer(self):
-        """Callable from the HotkeyManager thread (Shift+F2) — never raises,
+        """Callable from the HotkeyManager thread (Shift+F3) — never raises,
         a broken mixer must not take the hotkey loop down with it."""
         try:
             if self._mixer_visible():
