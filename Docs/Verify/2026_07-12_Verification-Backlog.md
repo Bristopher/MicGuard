@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-15 — v1.6.0 RELEASED; §10 added/extended: "check now" update link, mixer-repaint-on-hotkey fix, versioned build archive (pre-stamped 1.6.1 test build)
+**Updated:** 2026-07-15 — v1.6.0 RELEASED; §10 added/extended: "check now" update link, mixer-repaint-on-hotkey fix, versioned build archive, exclusive-fullscreen popup suppression (pre-stamped 1.6.1 test build)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `03d6e59` (2026-07-14, v1.6.0 pre-stamp) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -260,6 +260,17 @@ quiet mode; SETTINGS_HTML contains the link/msg/CSS.
 5. **Versioned build archive (release.ps1).** Next release should leave a
    copy at `Releases\v<ver>\MicGuard-<ver>.exe` (git-ignored) while the
    GitHub asset stays named exactly `MicGuard.exe`.
+6. **Exclusive-fullscreen popups suppressed (your 2026-07-15 "minimizes my
+   game" report).** Root cause: showing ANY window — even no-activate — over
+   a D3D exclusive-fullscreen game breaks its exclusive mode and Windows
+   minimizes it. All three popups (mixer, OSD, fallback alert) now check
+   `SHQueryUserNotificationState` and stay hidden while an exclusive
+   fullscreen app is foreground; volume hotkeys still act, only the visuals
+   are suppressed (logged as "suppressed: exclusive fullscreen"). Verify in
+   your game set to EXCLUSIVE fullscreen: shift+f2 / ctrl+↑ must no longer
+   minimize it (volume still changes — check by ear); switch the same game
+   to borderless and confirm the popups are back. Judgment: is silent
+   suppression OK in exclusive mode, or do you want a tray toast fallback?
 
 ---
 

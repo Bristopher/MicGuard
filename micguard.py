@@ -403,6 +403,23 @@ def adjust_system_volume(step: int) -> tuple[str, int] | None:
 MAX_BOOST = 50
 
 
+def exclusive_fullscreen_active() -> bool:
+    """True when the foreground app holds the display in D3D EXCLUSIVE
+    fullscreen (QUNS_RUNNING_D3D_FULL_SCREEN). Showing ANY window over that —
+    even no-activate — breaks the exclusive mode and Windows minimizes the
+    game (Bristopher, 2026-07-15). Borderless/windowed report a different
+    state and are unaffected. On any failure default to False (show)."""
+    try:
+        state = ctypes.c_int()
+        QUNS_RUNNING_D3D_FULL_SCREEN = 3
+        if ctypes.windll.shell32.SHQueryUserNotificationState(
+                ctypes.byref(state)) == 0:                    # S_OK
+            return state.value == QUNS_RUNNING_D3D_FULL_SCREEN
+    except Exception:
+        pass
+    return False
+
+
 def get_foreground_exe() -> str | None:
     """Exe name of the process owning the foreground window (original case),
     or None (no window / lookup failure / our own process)."""
@@ -2653,6 +2670,9 @@ class App:
             log.info("fallback alert: %s — %s", title, sub)
             if not self.cfg.get("notify_fallback"):
                 return
+            if exclusive_fullscreen_active():
+                log.info("fallback alert suppressed: exclusive fullscreen")
+                return
             import webview
             if self._alert_win is None:
                 self._make_alert_window()
@@ -2712,6 +2732,8 @@ class App:
         HotkeyManager thread — never raises (a broken OSD must not take the
         hotkeys down with it)."""
         try:
+            if exclusive_fullscreen_active():
+                return  # showing the OSD would minimize the game (see helper)
             import webview
             if self._osd_win is None:
                 self._make_osd_window()
@@ -2844,6 +2866,11 @@ class App:
         return mx + (mw - MIXER_W) // 2, my + mh - h - 80
 
     def _show_mixer(self):
+        if exclusive_fullscreen_active():
+            # drawing over an exclusive-fullscreen game minimizes it — the
+            # nudge hotkeys still work, only the popup is suppressed
+            log.info("mixer suppressed: exclusive-fullscreen app in foreground")
+            return
         _co_initialize()
         if self._mixer_win is None:
             self._make_mixer_window(hidden=True)
