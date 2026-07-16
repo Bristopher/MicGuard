@@ -269,5 +269,56 @@ class TestMixerKeyAction(unittest.TestCase):
         self.assertIsNone(m.mixer_key_action("digits", "f5"))
 
 
+class TestRolodexRows(unittest.TestCase):
+    BINDINGS = [{"keys": "ctrl+up", "target": "system", "step": 2},
+                {"keys": "ctrl+shift+up", "target": "app:Discord.exe", "step": 2}]
+
+    def test_rest_tier_appended_alphabetical_dedup(self):
+        sessions = {"discord.exe": 100, "spotify.exe": 40,
+                    "chrome.exe": 70, "game.exe": 90}
+        rows = m.build_mixer_rows(self.BINDINGS, sessions, "Game.exe",
+                                  m.BoostState(), 50)
+        keys = [r["key"] for r in rows]
+        # pinned: system, discord (bound), active(game) — then rest alphabetical,
+        # deduped against discord AND the active window's exe
+        self.assertEqual(keys[:3], ["system", "app:discord.exe", "active"])
+        self.assertEqual(keys[3:], ["app:chrome.exe", "app:spotify.exe"])
+        self.assertEqual(rows[3]["chip"], "")
+        self.assertEqual(rows[1]["exe"], "discord.exe")
+        self.assertEqual(rows[0]["exe"], None)
+
+    def test_muted_flag(self):
+        rows = m.build_mixer_rows(self.BINDINGS, {"discord.exe": 100}, None,
+                                  m.BoostState(), 50,
+                                  mutes={"system": True, "discord.exe": True})
+        self.assertTrue(rows[0]["muted"])          # system
+        self.assertTrue(rows[1]["muted"])          # discord
+        self.assertFalse(rows[2]["muted"])         # active (no fg)
+
+    def test_mutes_none_means_all_unmuted(self):
+        rows = m.build_mixer_rows(self.BINDINGS, {}, None, m.BoostState(), 50)
+        self.assertFalse(any(r["muted"] for r in rows))
+
+
+class TestMixerViewport(unittest.TestCase):
+    def test_all_fit_no_dots(self):
+        self.assertEqual(m.mixer_viewport(5, 2, 0), (0, False, False))
+
+    def test_selection_below_scrolls_down(self):
+        off, above, below = m.mixer_viewport(12, 8, 0)
+        self.assertEqual(off, 8 - m.MIXER_VISIBLE + 1)   # selected is last visible
+        self.assertTrue(above)
+        self.assertTrue(below)
+
+    def test_selection_above_scrolls_up(self):
+        self.assertEqual(m.mixer_viewport(12, 1, 5)[0], 1)
+
+    def test_bottom_of_list_no_dots_below(self):
+        off, above, below = m.mixer_viewport(12, 11, 0)
+        self.assertEqual(off, 12 - m.MIXER_VISIBLE)
+        self.assertTrue(above)
+        self.assertFalse(below)
+
+
 if __name__ == "__main__":
     unittest.main()

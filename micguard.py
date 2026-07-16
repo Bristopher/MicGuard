@@ -534,16 +534,24 @@ def boosted_nudge(state: BoostState, exe: str, step: int,
 
 
 def build_mixer_rows(bindings, sessions, foreground_exe,
-                     state: BoostState, system_pct: int):
+                     state: BoostState, system_pct: int, mutes=None):
     """Row model for the mixer popup: System, one row per distinct app:<exe>
-    binding target (bindings order), then Active window. pct None = no live
-    session. `chip` = first bound combo for that row's target ('' if none)."""
+    binding target (bindings order), Active window, then a "rest" tier of
+    every other live session (alphabetical, deduped against the pinned rows).
+    pct None = no live session. `chip` = first bound combo for that row's
+    target ('' if none). `muted` reflects the (exe-lowercased) `mutes` dict,
+    keyed "system" for the system row. `exe` is the lowercase session key for
+    app/rest rows, the lowercase foreground exe (or None) for the active row,
+    and None for the system row — Task 5 forward-compat."""
+    mutes = mutes or {}
+
     def chip(target):
         return next((b.get("keys", "") for b in bindings
                      if b.get("target") == target), "")
 
     rows = [{"key": "system", "label": "System", "pct": system_pct,
-             "boost": 0, "ducked": 0, "chip": chip("system")}]
+             "boost": 0, "ducked": 0, "chip": chip("system"),
+             "muted": bool(mutes.get("system")), "exe": None}]
     seen = set()
     for b in bindings:
         t = b.get("target", "")
@@ -559,7 +567,8 @@ def build_mixer_rows(bindings, sessions, foreground_exe,
                      "boost": state.boost.get(low, 0),
                      "ducked": max(0, state.ducked[low] - sessions[low])
                      if low in state.ducked and low in sessions else 0,
-                     "chip": b.get("keys", "")})
+                     "chip": b.get("keys", ""),
+                     "muted": bool(mutes.get(low)), "exe": low})
     fg = foreground_exe or "—"
     low = (foreground_exe or "").lower()
     rows.append({"key": "active", "label": f"Active window ({fg})",
@@ -567,8 +576,33 @@ def build_mixer_rows(bindings, sessions, foreground_exe,
                  "boost": state.boost.get(low, 0),
                  "ducked": max(0, state.ducked[low] - sessions[low])
                  if low in state.ducked and low in sessions else 0,
-                 "chip": chip("active")})
+                 "chip": chip("active"),
+                 "muted": bool(mutes.get(low)), "exe": low or None})
+    pinned = seen | {low} if low else set(seen)
+    for exe in sorted(k for k in sessions if k not in pinned):
+        rows.append({"key": f"app:{exe}", "label": exe,
+                     "pct": sessions[exe],
+                     "boost": state.boost.get(exe, 0),
+                     "ducked": max(0, state.ducked[exe] - sessions[exe])
+                     if exe in state.ducked else 0,
+                     "chip": "", "muted": bool(mutes.get(exe)), "exe": exe})
     return rows
+
+
+MIXER_VISIBLE = 7   # max rows on screen; more scrolls (rolodex, v1.7)
+
+
+def mixer_viewport(n_rows: int, selected: int, offset: int):
+    """PURE viewport math: clamp offset so `selected` is visible inside a
+    MIXER_VISIBLE-row window. Returns (offset, dots_above, dots_below)."""
+    if n_rows <= MIXER_VISIBLE:
+        return 0, False, False
+    offset = max(0, min(offset, n_rows - MIXER_VISIBLE))
+    if selected < offset:
+        offset = selected
+    elif selected >= offset + MIXER_VISIBLE:
+        offset = selected - MIXER_VISIBLE + 1
+    return offset, offset > 0, offset + MIXER_VISIBLE < n_rows
 
 
 def mixer_key_action(nav: str, key: str) -> tuple[str, int] | None:
@@ -1672,10 +1706,17 @@ body{color:#fafafa;padding:0;user-select:none;overflow:hidden;
       background:#18181b;border:1px solid #27272a;border-radius:5px;
       padding:2px 5px;text-transform:uppercase}
 .foot{padding:6px 6px 2px;color:#52525b;font-size:10px;text-align:center}
+.dots{display:block;text-align:center;color:#52525b;font-size:9px;
+      letter-spacing:4px;line-height:10px;height:10px;visibility:hidden}
+.dots.on{visibility:visible}
+.row .name .mut{color:#ef4444;font-weight:500;font-size:11px;margin-left:6px}
+.row.muted .fill{background:#3f3f46}
 </style></head><body>
 <div class="card">
   <div class="hdr"><span class="t">Volume mixer</span><span id="hint"></span></div>
+  <div class="dots" id="dotsup">&bull;&nbsp;&bull;&nbsp;&bull;</div>
   <div id="rows"></div>
+  <div class="dots" id="dotsdn">&bull;&nbsp;&bull;&nbsp;&bull;</div>
   <div class="foot">Esc closes &middot; 1&ndash;9 pick &middot; &#8593;&#8595; adjust</div>
 </div>
 <script>
@@ -1690,10 +1731,11 @@ function setMixer(model){
     // mark = "100%"); the main fill scales into the remaining 75%.
     const fill = r.pct === null ? 0 : Math.min(100, r.pct) / 100 * 75;
     const over = r.boost ? Math.min(25, 5 + r.boost) : 0;
-    return `<div class="row${i === model.selected ? ' sel' : ''}">
+    return `<div class="row${i === model.selected ? ' sel' : ''}${r.muted ? ' muted' : ''}">
       <span class="badge">${i + 1}</span>
       <span class="info"><span class="name">${esc(r.label)}${
-        r.ducked ? `<span class="duck">ducked &minus;${r.ducked}%</span>` : ''}</span>
+        r.ducked ? `<span class="duck">ducked &minus;${r.ducked}%</span>` : ''}${
+        r.muted ? `<span class="mut">muted</span>` : ''}</span>
         <span class="bar"><span class="fill" style="width:${fill}%"></span><span class="div"></span>${
           over ? `<span class="over" style="width:${over}%"></span>` : ''}</span></span>
       ${pctHtml}
@@ -1701,6 +1743,9 @@ function setMixer(model){
     </div>`;
   }).join('');
   document.body.dataset.rows = model.rows.length;
+  document.getElementById('dotsup').className = 'dots' + (model.dotsAbove ? ' on' : '');
+  document.getElementById('dotsdn').className = 'dots' + (model.dotsBelow ? ' on' : '');
+  if (model.footer) document.querySelector('.foot').textContent = model.footer;
 }
 </script></body></html>"""
 
@@ -1885,6 +1930,7 @@ class App:
         self._mixer_timer = None
         self._mixer_primed = False      # _make_mixer_window resets this too
         self._mixer_sel = 0
+        self._mixer_off = 0             # rolodex viewport offset (v1.7)
         self._mixer_rows = []           # last build_mixer_rows() output (Task 5 reads it)
         self.hotkeys = None             # HotkeyManager while hotkeys are enabled
         self._monitor = None            # MicMonitor while "hear yourself" is on
@@ -2879,10 +2925,20 @@ class App:
         boost = self.hotkeys.boost if self.hotkeys else BoostState()
         system = get_system_volume()
         rows = build_mixer_rows(self.cfg["hotkeys"]["bindings"], sessions, fg,
-                                boost, system)
+                                boost, system, mutes=None)
         self._mixer_rows = rows
-        self._mixer_win.evaluate_js(
-            f"setMixer({json.dumps({'rows': rows, 'selected': self._mixer_sel})})")
+        self._mixer_sel = min(self._mixer_sel, len(rows) - 1)
+        off, above, below = mixer_viewport(len(rows), self._mixer_sel,
+                                           getattr(self, "_mixer_off", 0))
+        self._mixer_off = off
+        nav = self.cfg.get("mixer_nav", "digits")
+        footer = ("Esc closes · ↑↓ pick · ←→ volume · M mute · 1–9 jump"
+                  if nav == "arrows" else
+                  "Esc closes · 1–9 pick · ↑↓ volume · M mute")
+        model = {"rows": rows[off:off + MIXER_VISIBLE],
+                 "selected": self._mixer_sel - off,
+                 "dotsAbove": above, "dotsBelow": below, "footer": footer}
+        self._mixer_win.evaluate_js(f"setMixer({json.dumps(model)})")
 
     def _mixer_position(self, h):
         """Bottom-center of the monitor the cursor is on, 80 px up from the
@@ -2923,6 +2979,7 @@ class App:
             # e.g. a window recreated after being closed.
             self._prime_mixer_window()
         self._mixer_sel = 0
+        self._mixer_off = 0
         self._refresh_mixer()                        # builds model + setMixer
         # height to content, then place bottom-center of the CURSOR's monitor
         h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
@@ -2962,6 +3019,10 @@ class App:
                 self._hide_mixer()
                 return
             if kind == "row":
+                # digits address VISIBLE rows — offset into the full list
+                # (Task 4 replaces this handler wholesale; this keeps
+                # selection offset-correct in the meantime)
+                val = self._mixer_off + val
                 if val < len(self._mixer_rows):
                     self._mixer_sel = val
             elif kind == "nudge":
