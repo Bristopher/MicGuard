@@ -23,6 +23,7 @@ about doesn't exist.
 | [superpowers/plans/2026-07-14 mixer-popup-active-window-boost](superpowers/plans/2026-07-14-mixer-popup-active-window-boost.md) | v1.6 implementation plan — 6 TDD tasks (boost math pytest-covered, ephemeral-key protocol, mixer window) |
 | [superpowers/specs/2026-07-15 mixer-nav-rolodex-meters](superpowers/specs/2026-07-15-mixer-nav-rolodex-meters-design.md) | Approved v1.7 design: mixer arrow-nav mode toggle, rolodex through all audio sessions w/ dots, live level pulse on bars (toggle, default on), M mute key |
 | [Future/Auto-Profile-Switch-On-App-Launch](Future/Auto-Profile-Switch-On-App-Launch.md) | Parked: auto-activate a profile when a mapped app launches (trigger candidates table, config/UI sketch) |
+| [superpowers/plans/2026-07-15 mixer-nav-rolodex-meters](superpowers/plans/2026-07-15-mixer-nav-rolodex-meters.md) | v1.7 implementation plan — 6 TDD tasks (nav-mode/viewport pure cores, mute helpers, meter pump, docs+test build) |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes
