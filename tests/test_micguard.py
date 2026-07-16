@@ -458,5 +458,13 @@ class TestMicEqWriter(unittest.TestCase):
         self.assertTrue(err.startswith("Mic EQ:"))
 
 
+class TestMicEqPersistence(unittest.TestCase):
+    def test_profile_roundtrip(self):
+        prof = {"name": "Default", "mics": [], "outputs": []}
+        prof["mic_eq"] = {"enabled": True, "gain_db": 7.5, "bass_db": 3.0}
+        self.assertEqual(m.mic_eq_of(prof),
+                         {"enabled": True, "gain_db": 7.5, "bass_db": 3.0})
+
+
 if __name__ == "__main__":
     unittest.main()

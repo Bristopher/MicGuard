@@ -1437,6 +1437,40 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
     onchange="S && (S.mixerMeters = this.checked)"><span class="knob"></span></label>
 </div>
 
+<div class="sec"><label>Mic EQ <span class="dim">(optional extension)</span></label></div>
+<div id="eqcard">
+  <div id="eqoff" style="display:none">
+    <div class="hint" style="margin-bottom:8px">
+      Adds real audio processing to your mic, beyond what Windows allows:<br>
+      &bull; <b>Gain boost</b> &mdash; up to +20 dB on top of the driver's maximum, so a
+      quiet mic gets genuinely louder for everyone who hears you.<br>
+      &bull; <b>Bass boost</b> &mdash; a low-shelf filter (0&ndash;+12 dB) for a deeper,
+      fuller voice on calls and recordings.<br>
+      Saved per profile, applied instantly. Powered by Equalizer APO, a free
+      open-source audio driver extension &mdash; one-time setup, ~3 clicks + a reboot.
+    </div>
+    <div class="addrow"><button class="sbtn" onclick="setupEq(this)">Set up Mic EQ</button>
+      <a class="chknow" href="javascript:void(0)"
+         onclick="pywebview.api.open_url('https://sourceforge.net/projects/equalizerapo/')">powered by Equalizer APO &#x2197;</a>
+      <span id="eqsetupmsg" class="hint"></span></div>
+  </div>
+  <div id="eqon" style="display:none">
+    <div class="switchrow">
+      <div><div class="lab">Enable for this profile</div>
+           <div class="hint" id="eqhint">extension active &mdash; Equalizer APO</div></div>
+      <label class="switch"><input type="checkbox" id="sw_eq"
+        onchange="S && (S.micEq.enabled = this.checked)"><span class="knob"></span></label>
+    </div>
+    <div class="vol-row"><label>Gain boost</label>
+      <span class="volwrap"><input id="eqgain" inputmode="numeric" maxlength="5"><span class="pct">dB</span></span></div>
+    <input type="range" id="eqgainr" min="-10" max="20" step="0.5" value="0">
+    <div class="vol-row"><label>Bass boost</label>
+      <span class="volwrap"><input id="eqbass" inputmode="numeric" maxlength="4"><span class="pct">dB</span></span></div>
+    <input type="range" id="eqbassr" min="0" max="12" step="0.5" value="0">
+    <div class="err" id="eqerr" style="display:none"></div>
+  </div>
+</div>
+
 <hr>
 <div class="switchrow">
   <div><div class="lab">Enforce mic + volume</div>
@@ -1715,6 +1749,46 @@ function addHk(){
 }
 function removeHk(i){ S.hotkeys.bindings.splice(i, 1); renderHk(); }
 
+// ---- Mic EQ card (optional Equalizer APO extension) ----
+function paintEq(){
+  if (!S || !S.micEq) return;
+  document.getElementById('eqoff').style.display = S.micEq.available ? 'none' : 'block';
+  document.getElementById('eqon').style.display = S.micEq.available ? 'block' : 'none';
+  if (!S.micEq.available) return;
+  document.getElementById('sw_eq').checked = !!S.micEq.enabled;
+  document.getElementById('eqgainr').value = S.micEq.gainDb;
+  document.getElementById('eqgain').value = S.micEq.gainDb;
+  document.getElementById('eqbassr').value = S.micEq.bassDb;
+  document.getElementById('eqbass').value = S.micEq.bassDb;
+  const err = document.getElementById('eqerr'), hint = document.getElementById('eqhint');
+  if (!S.micEq.processed){
+    err.style.display = 'block';
+    err.textContent = "Your current mic isn't processed by Equalizer APO yet — open its Configurator and tick the mic under Capture, then reboot.";
+  } else if (S.micEq.error){
+    err.style.display = 'block'; err.textContent = S.micEq.error;
+  } else { err.style.display = 'none'; }
+  hint.textContent = 'extension active — Equalizer APO';
+}
+['eqgainr','eqbassr'].forEach(id => document.getElementById(id).addEventListener('input', e => {
+  const t = id === 'eqgainr' ? 'gainDb' : 'bassDb';
+  S.micEq[t] = +e.target.value;
+  document.getElementById(id === 'eqgainr' ? 'eqgain' : 'eqbass').value = e.target.value;
+}));
+['eqgain','eqbass'].forEach(id => document.getElementById(id).addEventListener('change', e => {
+  const t = id === 'eqgain' ? 'gainDb' : 'bassDb';
+  const lo = id === 'eqgain' ? -10 : 0, hi = id === 'eqgain' ? 20 : 12;
+  let v = parseFloat(e.target.value); if (isNaN(v)) v = 0;
+  v = Math.max(lo, Math.min(hi, v));
+  S.micEq[t] = v; paintEq();
+}));
+async function setupEq(btn){
+  btn.disabled = true;
+  document.getElementById('eqsetupmsg').textContent = 'starting setup…';
+  const r = await pywebview.api.setup_eq();
+  document.getElementById('eqsetupmsg').textContent = r && r.msg ? r.msg : '';
+  btn.disabled = false;
+}
+
 // ---- state in / state out ----
 async function refresh(profile){
   const s = await pywebview.api.get_state(profile || null);
@@ -1732,6 +1806,7 @@ async function refresh(profile){
   renderList('out');
   renderList('mic');
   renderHk();
+  paintEq();
   document.getElementById('sw_enforce').checked = s.enforce;
   document.getElementById('sw_startup').checked = s.runAtStartup;
   document.getElementById('sw_updates').checked = s.checkUpdates;
@@ -1769,6 +1844,7 @@ async function save(){
     notifyFallback: document.getElementById('sw_fallback').checked,
     mixerNav: document.getElementById('mixnav').value,
     mixerMeters: document.getElementById('sw_mixmeters').checked,
+    micEq: S.micEq,
   });
   S.hotkeyFailures = (r && r.hotkeyFailures) || [];
   renderHk();  // repaint red markers on combos another app holds
@@ -2483,6 +2559,7 @@ class App:
                     "notifyFallback": bool(app.cfg["notify_fallback"]),
                     "mixerNav": app.cfg.get("mixer_nav", "digits"),
                     "mixerMeters": bool(app.cfg.get("mixer_meters", True)),
+                    "micEq": app._mic_eq_state(),
                     "version": VERSION,
                     "recommended": RECOMMENDED_VOLUME,
                     "sessions": _session_names(),
@@ -2632,6 +2709,11 @@ class App:
                 nav = state.get("mixerNav")
                 app.cfg["mixer_nav"] = nav if nav in ("digits", "arrows") else "digits"
                 app.cfg["mixer_meters"] = bool(state.get("mixerMeters", True))
+                me = state.get("micEq") or {}
+                prof["mic_eq"] = {"enabled": bool(me.get("enabled")),
+                                  "gain_db": me.get("gainDb", 0),
+                                  "bass_db": me.get("bassDb", 0)}
+                app._apply_mic_eq()
                 save_config(app.cfg)
                 try:
                     set_run_at_startup(app.cfg["run_at_startup"])
@@ -2646,7 +2728,8 @@ class App:
                 # window stays OPEN (user request 2026-07-13) — JS shows the
                 # green "Saved" confirmation; report unregistrable combos
                 return {"ok": True,
-                        "hotkeyFailures": app._hotkey_failures(wait=2.0)}
+                        "hotkeyFailures": app._hotkey_failures(wait=2.0),
+                        "micEqError": getattr(app, "_eq_error", "")}
 
             def open_github(self_api):
                 webbrowser.open(f"https://github.com/{GITHUB_REPO}")
@@ -2656,6 +2739,13 @@ class App:
                 # consent dialog) resolves; quiet=True suppresses the tray
                 # toast — the returned string shows inline in the settings row
                 return app._update_check(quiet=True)
+
+            def setup_eq(self_api):
+                return {"ok": False, "msg": "setup flow lands in the next task"}
+
+            def open_url(self_api, url):
+                if str(url).startswith("https://"):
+                    webbrowser.open(url)
 
             def cancel(self_api):
                 app._settings_closing()
@@ -3444,6 +3534,25 @@ class App:
         if wait:
             mgr._ready.wait(timeout=wait)
         return list(mgr.failed)
+
+    def _mic_eq_state(self) -> dict:
+        """Settings-card model for the Mic EQ extension (spec §1)."""
+        cfg_dir = apo_config_dir()
+        prof = next((p for p in self.cfg["profiles"]
+                     if p["name"] == self.cfg.get("active_profile")),
+                    self.cfg["profiles"][0])
+        eq = mic_eq_of(prof)
+        enforced = (self.enforcer.enforced.get("capture") or {}) if self.enforcer else {}
+        processed = True
+        if cfg_dir and enforced.get("id"):
+            processed = mic_is_apo_processed(enforced["id"]) is not False
+        return {"available": cfg_dir is not None, "processed": processed,
+                "enabled": eq["enabled"], "gainDb": eq["gain_db"],
+                "bassDb": eq["bass_db"], "error": getattr(self, "_eq_error", "")}
+
+    def _apply_mic_eq(self):
+        """Render + write the EQ block for the active profile/mic (Task 5)."""
+        self._eq_error = ""
 
     def _patch_tray_clicks(self):
         """Reroute tray clicks: left → Settings, right → the themed menu.
