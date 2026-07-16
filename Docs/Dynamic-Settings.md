@@ -14,7 +14,7 @@ permanent shape adapter that runs before the merge:
   `save_config()` in `micguard.py`.
 - **Defaults:** the `DEFAULT_CONFIG` dict at the top of `micguard.py`:
   `profiles`, `active_profile`, `enforce`, `notify_fallback`, `hotkeys`,
-  `run_at_startup`, `check_updates`.
+  `run_at_startup`, `check_updates`, `mixer_nav`, `mixer_meters`.
 - **Precedence:** file value > `DEFAULT_CONFIG` default, applied in
   `load_config()` via `DEFAULT_CONFIG | migrate_config(json.load(f))`. A
   missing/corrupt file returns `None`, which triggers the first-run path (mic
@@ -78,6 +78,19 @@ Each profile is a self-contained pair of ordered priority lists (see
 `active_profile_lists(cfg)` and `pick_device(entries, active_ids)` in
 [Features/Device-Priority-Profiles-Hotkeys.md](Features/Device-Priority-Profiles-Hotkeys.md)).
 `hotkeys.bindings[].target` is `"system"` or `"app:<exe-name>"`.
+
+## Settings Reference
+
+| Key | Default | Meaning | Read By |
+|---|---|---|---|
+| `enforce` | `true` | Snap mic + volume back when they change | Enforcer (live) |
+| `notify_fallback` | `true` | Popup when device disconnects → fallback | App (on fallback) |
+| `hotkeys.enabled` | `false` | Whether hotkey bindings are active | Hotkey manager (live) |
+| `hotkeys.bindings` | `[...5 defaults...]` | List of key + target pairs for volume nudges | Hotkey manager (live) |
+| `run_at_startup` | `true` | HKCU Run key entry (no admin, no Task Scheduler) | App (on save) |
+| `check_updates` | `true` | Check GitHub releases on launch | App (on launch) |
+| `mixer_nav` | `"digits"` | How Shift+F3 popup's keys work: `"digits"` (1-9 pick, ↑↓ volume) or `"arrows"` (↑↓ pick, ←→ volume) | Mixer (live) |
+| `mixer_meters` | `true` | Live level pulse on mixer bars (polls while popup open) | Mixer (live) |
 
 ## Adding a new setting — exact steps
 

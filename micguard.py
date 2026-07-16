@@ -55,6 +55,8 @@ DEFAULT_CONFIG = {
             {"keys": "shift+f3", "target": "mixer", "step": 0},
         ],
     },
+    "mixer_nav": "digits",     # "digits" (1-9 pick, up/down nudge) | "arrows" (up/down pick, left/right nudge)
+    "mixer_meters": True,      # live level pulse on the mixer bars
     "run_at_startup": True,
     "check_updates": True,
 }
@@ -1116,6 +1118,20 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 <div id="hklist"></div>
 <a class="addlink" href="javascript:void(0)" onclick="addHk()">+ Add binding</a>
 
+<div class="switchrow">
+  <div><div class="lab">Mixer navigation</div>
+       <div class="hint">How the Shift+F3 popup's keys work while it's open</div></div>
+  <div class="select-wrap"><select id="mixnav">
+    <option value="digits">1&ndash;9 pick &middot; &#8593;&#8595; volume</option>
+    <option value="arrows">&#8593;&#8595; pick &middot; &#8592;&#8594; volume</option>
+  </select></div>
+</div>
+<div class="switchrow">
+  <div><div class="lab">Live level pulse on mixer bars</div>
+       <div class="hint">Each row's bar dances with that app's real-time audio (only polls while the popup is open)</div></div>
+  <label class="switch"><input type="checkbox" id="sw_mixmeters"><span class="knob"></span></label>
+</div>
+
 <hr>
 <div class="switchrow">
   <div><div class="lab">Enforce mic + volume</div>
@@ -1359,6 +1375,8 @@ function renderHk(){
   document.getElementById('hklist').innerHTML =
     S.hotkeys.bindings.map((b, i) => hkRowHtml(b, i)).join('');
   document.getElementById('sw_hotkeys').checked = !!S.hotkeys.enabled;
+  document.getElementById('mixnav').value = S.mixerNav || 'digits';
+  document.getElementById('sw_mixmeters').checked = S.mixerMeters !== false;
 }
 // combo capture: focus the field and press keys; Escape clears
 // whitelist mirrors parse_hotkey()'s _VKS + single alpha/digit support —
@@ -1444,6 +1462,8 @@ async function save(){
     runAtStartup: document.getElementById('sw_startup').checked,
     checkUpdates: document.getElementById('sw_updates').checked,
     notifyFallback: document.getElementById('sw_fallback').checked,
+    mixerNav: document.getElementById('mixnav').value,
+    mixerMeters: document.getElementById('sw_mixmeters').checked,
   });
   S.hotkeyFailures = (r && r.hotkeyFailures) || [];
   renderHk();  // repaint red markers on combos another app holds
@@ -2132,6 +2152,8 @@ class App:
                     "runAtStartup": bool(app.cfg["run_at_startup"]),
                     "checkUpdates": bool(app.cfg["check_updates"]),
                     "notifyFallback": bool(app.cfg["notify_fallback"]),
+                    "mixerNav": app.cfg.get("mixer_nav", "digits"),
+                    "mixerMeters": bool(app.cfg.get("mixer_meters", True)),
                     "version": VERSION,
                     "recommended": RECOMMENDED_VOLUME,
                     "sessions": _session_names(),
@@ -2278,6 +2300,9 @@ class App:
                 app.cfg["run_at_startup"] = bool(state.get("runAtStartup"))
                 app.cfg["check_updates"] = bool(state.get("checkUpdates"))
                 app.cfg["notify_fallback"] = bool(state.get("notifyFallback"))
+                nav = state.get("mixerNav")
+                app.cfg["mixer_nav"] = nav if nav in ("digits", "arrows") else "digits"
+                app.cfg["mixer_meters"] = bool(state.get("mixerMeters", True))
                 save_config(app.cfg)
                 try:
                     set_run_at_startup(app.cfg["run_at_startup"])
