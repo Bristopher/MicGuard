@@ -2,8 +2,8 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-15 — v1.6.0 RELEASED; §10 added/extended: "check now" update link, mixer-repaint-on-hotkey fix, versioned build archive, exclusive-fullscreen popup suppression (pre-stamped 1.6.1 test build)
-**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `03d6e59` (2026-07-14, v1.6.0 pre-stamp) + this docs commit, all commits reviewed through **2026-07-14** — everything shipped is in §1–§9 below. **Next sweep starts from this docs commit.**
+**Updated:** 2026-07-16 — §11 added: v1.7 mixer nav modes/rolodex/level pulse/M mute (pre-stamped 1.7.0 test build); fixed a real bug found during the Task 6 sweep (System row level pulse never resolved — see §11)
+**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `f26a9c5..3aa9696` (2026-07-15, v1.7 implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§11 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
 
@@ -276,6 +276,91 @@ quiet mode; SETTINGS_HTML contains the link/msg/CSS.
    live config all updated. Verify shift+f3 toggles the mixer and shift+f2
    is free for Ubisoft again.
 
+## 11. v1.7 — mixer nav modes, rolodex, level pulse, M mute (~15 min)
+
+**Shipped:** `f26a9c5`..`3aa9696` (implementation: `f26a9c5` mixer settings,
+`03a2731` `mixer_key_action`, `407d5f6` rolodex/viewport, `9480bbe` nav
+modes + M mute, `3aa9696` level pulse) + this docs commit, ship date
+2026-07-15 — NOT yet released; `VERSION` pre-stamped `1.7.0` and that exact
+build is INSTALLED at `%LOCALAPPDATA%\Programs\MicGuard` for this hands-on
+pass (`.\release.ps1` Enter-accept will offer exactly 1.7.0 on Bristopher's
+go). Full detail:
+[Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md)
+§"Mixer nav modes, rolodex, level pulse, M mute (v1.7)". Design:
+[superpowers/specs/2026-07-15-mixer-nav-rolodex-meters-design.md](../superpowers/specs/2026-07-15-mixer-nav-rolodex-meters-design.md).
+
+**Bug found and fixed during this sweep:** `App._start_mixer_meters`'s pump
+called `AudioUtilities.GetSpeakers().GetId()` to resolve the System row's
+endpoint meter — pycaw's `AudioDevice` wrapper only exposes an `.id`
+attribute, not a `.GetId()` method, so that call always raised
+`AttributeError`, caught by the broad `except`, silently leaving `sysmeter`
+`None` forever. The System row's level pulse never worked as originally
+shipped. Fixed to `AudioUtilities.GetSpeakers().id` in the same commit as
+this doc; app-row meters (which use the correct `get_session_meters()` path)
+were never affected.
+
+**Machine-verified (Task 6 sweep, 2026-07-16):** `uv run pytest -q` — 42/42
+green (adds `TestMixerKeyAction` both nav modes × all keys, `mixer_viewport`
+offset/dots math, rolodex tier ordering/dedup, mute-helper tests on top of
+the v1.6 28); `uv run python -c "import micguard"` clean; mute toggle harness
+against a real live session — `toggle ok: True` (Discord.exe muted/unmuted/
+restored round-trip, plus a System-endpoint mute toggle round-trip, both
+confirmed restored to their original state); rolodex harness against real
+running processes returned actual sessions (`discord.exe`, `steam.exe`,
+`chrome.exe`, `msedge.exe`, `obs64.exe`, `rustdesk.exe`, `sharex.exe`,
+`shellexperiencehost.exe` — 8 apps, pinned System/Discord/Active-window rows
+first, rest alphabetical) and correct `mixer_viewport`/`mixer_key_action`
+results for both nav modes; COM pump harness — 8 cycles, each on its own
+thread (matching production `_start_mixer_meters` behavior), zero errors,
+clean CoInitialize/CoUninitialize teardown (locals nulled + `gc.collect()`
+before `CoUninitialize`, per AI-Development-Guide mistake #11); the frozen
+1.7.0 build logs `MicGuard v1.7.0 starting (frozen=True)` and passed the
+sabotage test live (`restored to 85`) both from source and via the installed
+frozen exe. None of this substitutes for real in-game/multi-app hands-on
+testing below.
+
+1. **Arrow mode in a real (borderless) game.** Settings → Hotkeys → set
+   "Mixer navigation" to arrows, Save. In a borderless game, open the mixer
+   — confirm ↑/↓ move the selection (scrolling at the viewport edges), ←/→
+   nudge the selected row's volume, and pressing a digit (1-9) still jumps
+   straight to that visible row (the one documented "digits still jump"
+   exception). Confirm the footer reads
+   `"Esc closes · ↑↓ pick · ←→ volume · M mute · 1–9 jump"`. Switch back to
+   digits mode and confirm ↑/↓ nudge instead of moving selection, footer
+   reads `"Esc closes · 1–9 pick · ↑↓ volume · M mute"`.
+2. **Rolodex with 8+ audio apps.** With several apps making sound at once
+   (browser tab, Discord, a game, etc.), open the mixer — scroll with
+   arrows/digits through more than 7 rows. Confirm: the dots strip (`•••`)
+   appears below the visible rows when more exist, and above once scrolled
+   down; the popup's HEIGHT does not change while scrolling (no jitter);
+   rows don't reorder between refreshes (the rest tier is alphabetical and
+   stable).
+3. **M mute during a real Discord call.** Join a real Discord call, open the
+   mixer, select Discord's row, press `M` — confirm Discord's session mutes
+   (dimmed row, red "muted" chip) and the other party can't hear you/you
+   can't hear them per what you muted; press `M` again to unmute. Then mute
+   it again and try nudging (↑/↓ or ←/→) instead of `M` — confirm the FIRST
+   nudge only unmutes (no volume change), and a second nudge actually
+   changes volume — does that "unmute first" feel match your Windows mixer
+   expectations, or is it surprising?
+4. **Level pulse readability + the `mixer_meters` toggle + the known
+   limitation.** With music/audio playing in a couple of apps, open the
+   mixer — do the bars' pulse overlays read clearly against the volume fill
+   at a glance, or is it too subtle/too busy? Flip `mixer_meters` off in
+   Settings, reopen the mixer — bars should sit still (no pulse). Then, with
+   the mixer ALREADY open, launch a new app that starts playing audio and
+   check its row — per the documented KNOWN LIMITATION, its bar should NOT
+   pulse until you close and reopen the mixer (meters resolve once per
+   open). Is that acceptable, or does it need to become "resolve on every
+   refresh" after all?
+5. **Settings rows save/reload, incl. live mode-switch.** Open Settings →
+   Hotkeys, change "Mixer navigation" and toggle "Live level pulse on mixer
+   bars", Save, close Settings, reopen it — confirm both rows show the saved
+   values. With the mixer popup OPEN, change `mixer_nav` in Settings and
+   Save (without closing the mixer) — the footer text should update on the
+   mixer's NEXT keypress-triggered refresh (not necessarily instantly), since
+   the mixer reads `cfg` live rather than caching it at open time.
+
 ---
 
 ## Sweep log (commit ranges reviewed for unverified work)
@@ -284,6 +369,8 @@ quiet mode; SETTINGS_HTML contains the link/msg/CSS.
 - 2026-07-13: `c4a3839` (v1.5 Task 1 start) → `a58c445` (v1.5 implementation, all 8 tasks) + this docs commit. Everything shipped is §7. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
 - 2026-07-14: `cc1b023` (v1.6 Task 1 start) → `3eb0be9` (Task 6 docs: mixer popup, boost, active target, settings targets, default `shift+f2` binding, all 5 v1.6 implementation tasks). Everything shipped is §9.
 - 2026-07-14 (later): `3c11052` (boost-bookkeeping fix round, covered by §9.7) → `03d6e59` (v1.6.0 pre-stamp + §9.8, no user-facing behavior beyond the version string) + this docs commit. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
+- 2026-07-15: `03d6e59` → `2a80bda` (v1.6.1: check-now update link, mixer repaint on hotkey nudges, exclusive-fullscreen popup suppression, default mixer bind `shift+f3`, versioned build archive). Everything shipped is §10.
+- 2026-07-16: `f26a9c5` (v1.7 Task 1 start) → `3aa9696` (v1.7 implementation, all 5 tasks: mixer settings, `mixer_key_action`, rolodex/viewport, nav modes + M mute, level pulse) + this docs commit (Task 6: feature doc, README, backlog §11, the `AudioUtilities.GetSpeakers().GetId()` → `.id` bugfix, v1.7.0 pre-stamp). Everything shipped is §11. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
 
 ## Changelog (verified items move here)
 

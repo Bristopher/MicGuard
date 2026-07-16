@@ -1,9 +1,9 @@
 # Device Priority Lists, Profiles, Fallback Alerts, Volume Hotkeys
 
-**Status:** ✅ Production (v1.5); mixer popup & boost added v1.6
+**Status:** ✅ Production (v1.5); mixer popup & boost added v1.6; nav modes/rolodex/pulse/mute added v1.7
 **Author:** Bristopher (design), AI-assisted implementation
-**Date:** 2026-07-14 (v1.6 additions)
-**Version:** 1.5.0 (mixer/boost code lands ahead of the 1.6.0 tag — see RELEASING.md)
+**Date:** 2026-07-15 (v1.7 additions)
+**Version:** 1.5.0 (mixer/boost/nav-rolodex-pulse-mute code lands ahead of the 1.7.0 tag — see RELEASING.md)
 
 ---
 
@@ -71,16 +71,32 @@ flag is set, else set once at switch time).
   focus, no per-app binding needed
 - ✅ (v1.6) 10 more pytest tests (`boosted_nudge`, `build_mixer_rows`, session
   helpers) — suite is now 25 tests
+- ✅ (v1.7) Mixer navigation modes (`mixer_nav`: digits default / arrows) with
+  a per-mode footer hint, `M` mute/unmute for the selected row (session mute
+  or, for System, the render endpoint mute), nudging a muted row unmutes it
+  first
+- ✅ (v1.7) Rolodex — the mixer now lists EVERY audio session (not just bound
+  targets), pinned tier (System/bound apps/active window) + alphabetical rest
+  tier, `MIXER_VISIBLE = 7` viewport with always-present dots strips so the
+  popup never resizes while scrolling
+- ✅ (v1.7) Live level pulse — `mixer_meters` switch (on by default) drives a
+  20 Hz meter pump that overlays real audio peaks on each row's bar while the
+  popup is open (known limitation: meters resolve once per open, see below)
+- ✅ (v1.7) 17 more pytest tests (`mixer_key_action` both modes, `mixer_viewport`,
+  rolodex tier ordering, mute helpers) — suite is now 42 tests
 
 ### Planned / deferred
 - 🔜 Hotkey profile cycling
 - 🔜 Auto-profile-switching by running app (would need process polling —
   banned by the Enforcer wake-queue convention; would need a different,
   event-driven detection mechanism to be considered)
-- 🔜 Mute-toggle hotkeys
+- 🔜 Mute-toggle hotkeys (standalone, outside the mixer popup — `M` inside
+  the mixer, added v1.7, only covers the selected row while the popup is open)
 - 🔜 Communications-role split (different device for calls vs. general default)
-- 🔜 Mixer rows for more than the bound `app:<exe>` targets + active window
-  (e.g. every currently-audible session, not just the bound ones)
+- 🔜 Auto-profile-switch when an app launches — captured as
+  [Future/Auto-Profile-Switch-On-App-Launch.md](../Future/Auto-Profile-Switch-On-App-Launch.md)
+- 🔜 Mouse support on the mixer (click row / drag bar) — not requested;
+  revisit only if keyboard-first ever feels limiting
 
 (See [Docs/Future/](../Future/) if any of these get picked up as a "later" ask.)
 
@@ -135,6 +151,113 @@ an update (config migration is additive-merge only at the top level — see
 Dynamic-Settings.md) — add it manually via Settings → Hotkeys → **+ Add** if
 you installed before v1.6.
 
+## Mixer nav modes, rolodex, level pulse, M mute (v1.7)
+
+Four upgrades to the v1.6 mixer popup, all gated behind two new settings, all
+scoped to while the popup is visible. Full design rationale:
+[superpowers/specs/2026-07-15-mixer-nav-rolodex-meters-design.md](../superpowers/specs/2026-07-15-mixer-nav-rolodex-meters-design.md).
+
+### Settings
+
+| Key | Default | Settings UI (Hotkeys card) | State key |
+|---|---|---|---|
+| `mixer_nav` | `"digits"` | Dropdown "Mixer navigation" — "Digits select, ↑/↓ change volume" / "Arrows: ↑/↓ select, ←/→ change volume" | `mixerNav` |
+| `mixer_meters` | `True` | Switch "Live level pulse on mixer bars" | `mixerMeters` |
+
+Both read live off `cfg` on every mixer open/keypress — no restart, no
+`App._restart_hotkeys()` needed. `save()` just writes the two keys back.
+
+### Navigation modes + M mute
+
+`mixer_key_action(nav: str, key: str) -> tuple[str, int] | None` is the pure
+map (`key` ∈ `"1".."9"`, `"up"`, `"down"`, `"left"`, `"right"`, `"esc"`,
+`"m"`), returning `("select", n)` / `("move", ±1)` / `("nudge", ±2)` /
+`("mute", 0)` / `("close", 0)` / `None` (inert in that mode):
+
+- **digits mode (default):** `1`–`9` select the visible row at that index;
+  ↑/↓ nudge the selected row ±2%; ←/→ are inert; `M` toggles mute; `Esc`
+  closes.
+- **arrows mode:** ↑/↓ move the selection (scrolling the viewport at the
+  edges); ←/→ nudge ±2%; digits still jump to a visible row (approved
+  design decision — "digits still jump"); `M`/`Esc` behave identically to
+  digits mode.
+
+Footer strings shown in the popup (`model["footer"]`, swapped per `mixer_nav`
+on every refresh):
+- digits: `"Esc closes · 1–9 pick · ↑↓ volume · M mute"`
+- arrows: `"Esc closes · ↑↓ pick · ←→ volume · M mute · 1–9 jump"`
+
+`MIXER_KEYS` (ephemeral, bare — no modifier — RegisterHotKey ids) now
+includes left (0x25, id 112), right (0x27, id 113), and M (0x4D, id 114)
+alongside the existing 1-9/up/down/esc; all are registered/unregistered
+together on `WM_APP_MIXER_ON`/`_OFF`, regardless of which nav mode is active
+— an inert key in the current mode is still grabbed (documented tradeoff:
+swallowing ←/→ while the popup is open beats re-registering the key set on a
+mid-open settings change).
+
+**Mute semantics:** `list_app_mutes() -> dict` (lowercase exe → True if any
+of its sessions is muted) and `set_app_mute(exe, mute) -> bool` toggle a
+session's `SimpleAudioVolume` mute; `get_system_mute()`/`set_system_mute(mute)`
+toggle the default render endpoint's mute for the System row. Muted rows
+render dimmed with a red "muted" chip and grey fill. Nudging (↑/↓ or ←/→) a
+muted row unmutes it first — `App._mixer_key`'s `"nudge"` branch checks
+`row["muted"]` and calls the mute-off helper before applying the volume
+change, matching Windows' own mixer feel. This is entirely separate from
+MicGuard's capture-side auto-unmute (which guards the mic against Windows/game
+mute, not outputs) — untouched by this feature.
+
+### Rolodex (every audio session, pinned + rest)
+
+`build_mixer_rows(bindings, sessions, foreground_exe, state, system_pct,
+mutes=None)` now returns two tiers:
+
+1. **Pinned** — System, one row per distinct `app:<exe>` binding (bindings
+   order), then Active window — unchanged from v1.6.
+2. **Rest** — every other session from `list_app_sessions()` not already
+   pinned, sorted alphabetically, so rows don't reorder between refreshes.
+
+Each row carries an `"exe"` field (lowercase session key for app/rest rows,
+lowercase foreground exe for the active row, `None` for System) that the v1.7
+mute/meter code keys off instead of re-deriving from the label.
+
+`MIXER_VISIBLE = 7` caps rows on screen. `mixer_viewport(n_rows, selected,
+offset) -> (offset, dots_above, dots_below)` is the pure clamp: keeps
+`selected` inside the 7-row window, shifting `offset` only when the selection
+would otherwise scroll off an edge. Two always-present dots strips (`• • •`,
+CSS `visibility` toggle via a `dots`/`dots on` class, not DOM add/remove) sit
+above and below the row list — visible only when `dotsAbove`/`dotsBelow` is
+true — so the popup's measured height never changes while scrolling (no
+jitter). Selection and offset both reset to 0 on every mixer open. Muted rows
+inside a scrolled viewport render the same dimmed/red-chip treatment as
+pinned rows.
+
+### Live level pulse (meter pump)
+
+`get_session_meters() -> dict` QIs `IAudioMeterInformation` off each audio
+session's control (lowercase exe → meter). A `mixer-meter` thread
+(`App._start_mixer_meters`) starts at the end of `_show_mixer` — only if
+`cfg["mixer_meters"]` is true — and is stopped by `App._stop_mixer_meters` in
+`_hide_mixer`. It CoInitializes, resolves `get_session_meters()` plus the
+default render endpoint's meter **once**, then polls both at 20 Hz
+(`stop.wait(0.05)`) and pushes `setLevels({rowKey: peak, ...})` into the
+page; the JS paints a brighter overlay fill inside each bar's track scaled to
+the bar's 75% fill zone — independent of, and layered over, the volume fill.
+On stop it follows the standard teardown discipline: nulls every COM local
+(`meters = sysmeter = None`), `gc.collect()`, **then** `CoUninitialize()`
+(AI-Development-Guide mistake #11); the stop flag is `_mixmeter_stop`, a
+plain `threading.Event`, never named `_stop` (mistake #12); every exception
+inside the pump loop is caught and just stops that row's pulse or ends the
+pump — it never touches the tray.
+
+**Known limitation (reviewer-confirmed, accepted):** the pump resolves
+session/endpoint meters **once, at pump start** (`_show_mixer`/popup-open
+time), not on every `_refresh_mixer` row-model rebuild. An app that starts
+playing audio while the popup is already open will appear in the rolodex on
+the next refresh (row model rebuilds every keypress) but its bar will not
+pulse — the pump has no meter reference for it — until the popup is closed
+and reopened. This trades a small staleness window for avoiding a QI-per-tick
+COM cost; revisit only if it proves confusing in practice.
+
 ## Design Philosophy / Ideology
 
 - **Strict priority, not "sticky."** The highest-priority CONNECTED device
@@ -175,10 +298,17 @@ Pure functions (unit-tested, no COM/hardware):
   hotkey nudge: clamps normally below 100%, engages `boost` (ducking other
   sessions) once already at 100% and still being pushed up, un-ducks on the
   way back down.
-- (v1.6) `build_mixer_rows(bindings, sessions, foreground_exe, state,
-  system_pct) -> list[dict]` — the mixer's row model (`key/label/pct/boost/
-  ducked/chip` per row): System, one row per distinct `app:<exe>` binding,
-  then Active window.
+- `build_mixer_rows(bindings, sessions, foreground_exe, state, system_pct,
+  mutes=None) -> list[dict]` — the mixer's row model (`key/label/pct/boost/
+  ducked/chip/muted/exe` per row): pinned tier (System, one row per distinct
+  `app:<exe>` binding, Active window) + (v1.7) a rest tier of every other
+  live session, alphabetical.
+- (v1.7) `mixer_key_action(nav: str, key: str) -> tuple[str, int] | None` —
+  maps one mixer keypress to `("select"/"move"/"nudge"/"mute"/"close", n)`
+  per nav mode; see "Navigation modes + M mute" above.
+- (v1.7) `mixer_viewport(n_rows: int, selected: int, offset: int) ->
+  (offset: int, dots_above: bool, dots_below: bool)` — pure clamp keeping
+  `selected` inside the `MIXER_VISIBLE`-row window.
 
 Runtime classes/methods (COM/hardware-touching, verified live):
 
@@ -206,13 +336,24 @@ Runtime classes/methods (COM/hardware-touching, verified live):
   `_mixer_visible()` — show/hide the mixer popup; callable from the hotkey
   thread, never raises.
 - (v1.6) `App._mixer_key(action)` — handles a mixer ephemeral keypress
-  (`("row", n)` / `("nudge", ±2)` / `("close", 0)`) on the hotkey thread.
+  (v1.7: `("select", n)` / `("move", ±1)` / `("nudge", ±2)` / `("mute", 0)` /
+  `("close", 0)`) on the hotkey thread; the `"nudge"` branch unmutes a muted
+  row before applying the volume change.
 - (v1.6) `HotkeyManager.set_mixer_keys(on)` — thread-safe request to
-  register/unregister the mixer's ephemeral digit/arrow/Esc keys (posts
-  `WM_APP_MIXER_ON`/`_OFF` into the manager thread's own loop).
+  register/unregister the mixer's ephemeral digit/arrow/Esc keys (v1.7: also
+  left/right/M) (posts `WM_APP_MIXER_ON`/`_OFF` into the manager thread's own
+  loop).
 - (v1.6) `App._restore_boost(mgr)` — un-ducks every session `mgr.boost`
   lowered; called on hotkey restart and app quit so boost never survives past
   its owning `HotkeyManager` instance.
+- (v1.7) `list_app_mutes() -> dict` / `set_app_mute(exe, mute) -> bool` —
+  session-level mute enumeration/toggle.
+- (v1.7) `get_system_mute() -> bool` / `set_system_mute(mute)` — default
+  render endpoint mute enumeration/toggle (the System row).
+- (v1.7) `get_session_meters() -> dict` — lowercase exe → `IAudioMeterInformation`
+  for every audio session (paired with `get_endpoint_meter` for the System row).
+- (v1.7) `App._start_mixer_meters()` / `_stop_mixer_meters()` — start/stop the
+  20 Hz `mixer-meter` pump thread; called from `_show_mixer`/`_hide_mixer`.
 
 ## Configuration
 
@@ -220,29 +361,36 @@ Schema, migration mechanics, and the "which level does a new setting live at"
 recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
 (§ "Config v2 shape" and § "Adding a new setting"). Summary of the new keys:
 `profiles`, `active_profile`, `notify_fallback`, `hotkeys.enabled`,
-`hotkeys.bindings[].{keys,target,step}`. `enforce` is unchanged in meaning
-(global switch, now covers both flows).
+`hotkeys.bindings[].{keys,target,step}`, (v1.7) `mixer_nav`, `mixer_meters`.
+`enforce` is unchanged in meaning (global switch, now covers both flows).
 
 ## Testing
 
-- **Automated:** `uv run pytest -q` — `tests/test_micguard.py`, 25 tests
+- **Automated:** `uv run pytest -q` — `tests/test_micguard.py`, 42 tests
   across `TestMigrateConfig`, `TestActiveProfileLists`, `TestPickDevice`,
-  `TestParseHotkey`, and (v1.6) `TestBoostedNudge`/`TestBuildMixerRows` and
-  the session-helper tests. No COM/hardware; safe in CI or on any machine.
+  `TestParseHotkey`, `TestBoostedNudge`/`TestBuildMixerRows` and the session-
+  helper tests (v1.6), and (v1.7) `mixer_key_action` across both nav modes ×
+  all keys, `mixer_viewport` offset/dots math, rolodex tier ordering/dedup,
+  and the mute helpers. No COM/hardware; safe in CI or on any machine.
 - **Live harness pattern** (per AI-Development-Guide §6, no COM = no automated
   test): build a profile whose #1 mic id is a fake string to force a fallback
   pick, confirm the enforcer selects #2 and `on_fallback` fires; press a
   registered hotkey and confirm the target's real volume moves + the OSD
   appears; re-run the standard sabotage test to confirm capture-flow
-  enforcement is unaffected by the render-flow generalization.
+  enforcement is unaffected by the render-flow generalization; (v1.7) open the
+  mixer in arrows mode and confirm select/scroll/nudge/mute round-trips, and
+  start/stop the meter pump 8× in a row with no COM crash on exit.
 - **Human-verify:** see
   [Verify/2026_07-12_Verification-Backlog.md](../Verify/2026_07-12_Verification-Backlog.md)
   §7 for the v1.5 click-through list (real USB unplug/replug, profile
   switching feel, hotkeys during a fullscreen game, Discord hotkey mid-call,
   hold-volume-off not fighting volume keys, v1.4→v1.5 config migration on the
-  real installed copy) and §9 for the v1.6 mixer/boost list (real borderless
+  real installed copy), §9 for the v1.6 mixer/boost list (real borderless
   game test, multi-monitor placement, boost duck audibility, exclusive-
-  fullscreen limitation acknowledgment, hotkey editor mixer target).
+  fullscreen limitation acknowledgment, hotkey editor mixer target), and §11
+  for the v1.7 nav/rolodex/pulse/mute list (arrow mode feel in a real game,
+  8+ app rolodex scroll stability, mute during a real call, pulse readability
+  + the once-per-open limitation, settings save/reload).
 
 ## Troubleshooting
 
@@ -256,6 +404,8 @@ recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
 | Mixer popup doesn't appear over a fullscreen game | Game is running EXCLUSIVE fullscreen, not borderless/windowed | Switch the game to borderless/windowed fullscreen — see "Exclusive-fullscreen limitation" above; the hotkey still fires (system-wide `RegisterHotKey`), only the popup's compositing is affected |
 | Boosting one app doesn't audibly duck the game | No foreground game detected at boost time, so ALL other sessions duck instead of just the game — or the game session wasn't at a nonzero volume to duck from | Check `get_foreground_exe()` returns the game's exe while boosting; confirm the game has an active audio session (`list_app_sessions()`) |
 | Digits/arrows do nothing while the mixer is open | Ephemeral mixer keys failed to register (another app holds one) or the popup closed before the keypress | Check the log for `"mixer key vk=... unavailable — skipped"`; re-summon the popup with the mixer hotkey |
+| An app that just started playing doesn't pulse | Known v1.7 limitation — the meter pump resolves sessions once at popup-open time | Close and reopen the mixer; see "Live level pulse" above |
+| Nudging a row does nothing but the row was red/"muted" | Expected — the first nudge only unmutes it (matches Windows' mixer feel) | Nudge again to actually change volume, or press `M` to unmute without changing volume |
 
 ## References
 - [Architecture.md](../Architecture.md) — threads table, event flow, gotchas
