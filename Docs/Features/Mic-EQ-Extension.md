@@ -80,7 +80,7 @@ Five layers, all in `micguard.py`:
 
 3. **Settings surface** (`SETTINGS_HTML` + `Api` in `_make_settings_window`):
    the always-visible "Mic EQ (optional extension)" card, state built by
-   `App._mic_eq_state() -> dict` (`available`, `processed`, `enabled`,
+   `App._mic_eq_state(prof: dict) -> dict` (`available`, `processed`, `enabled`,
    `gainDb`, `bassDb`, `error`) and applied by `App._apply_mic_eq(...)`.
    Card has three renders — not-installed, installed, installed-but-mic-
    not-processed — see "Design Ideology" below.
@@ -171,7 +171,7 @@ Five layers, all in `micguard.py`:
 | `mic_is_apo_processed` | `(device_id: str) -> bool \| None` | Per-endpoint processed check |
 | `eq_device_name` | `(cfg: dict, enforced_capture: dict \| None) -> str \| None` | Enforced-mic-first device targeting |
 | `App._apply_mic_eq` | `(enforced_override=_EQ_UNSET)` | Glue: render + write for the active profile/mic |
-| `App._mic_eq_state` | `() -> dict` | Settings-card model (`available/processed/enabled/gainDb/bassDb/error`) |
+| `App._mic_eq_state` | `(prof: dict) -> dict` | Settings-card model (`available/processed/enabled/gainDb/bassDb/error`) |
 | `App._setup_mic_eq` | `() -> {"ok": bool, "msg": str}` | Guided setup flow entry point |
 
 Constants: `EQ_FILE`, `EQ_INCLUDE_LINE`, `EQ_GAIN_MIN`/`EQ_GAIN_MAX`

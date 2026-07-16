@@ -1869,6 +1869,7 @@ async function save(){
   S.hotkeyFailures = (r && r.hotkeyFailures) || [];
   renderHk();  // repaint red markers on combos another app holds
   if (r && r.micEqError){ S.micEq.error = r.micEqError; }
+  else if (S && S.micEq) { S.micEq.error = ''; }
   paintEq();   // surface a write failure (e.g. unwritable config dir) on the card
   showSaved(r);
 }

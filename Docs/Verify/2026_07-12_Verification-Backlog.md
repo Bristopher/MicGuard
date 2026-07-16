@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-16 — §12 added (v1.8 Mic EQ extension)
+**Updated:** 2026-07-16 — §12 added (v1.8 Mic EQ extension), §12 item 6 (final-review minor triage)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -429,6 +429,13 @@ run can.
    not-installed state's copy fresh, as if you'd never seen the design spec
    — is "real gain boost past your driver's max + bass boost, one guided
    setup" clear and compelling, or does it need tightening?
+6. **Known minor polish (final-review triage, all non-blocking):** sliders stay
+   enabled in the "mic not processed" state; a v1-era unnamed device entry
+   skips the fallback EQ rewrite; a millisecond include-line write race
+   between the setup poll and Save could duplicate the include (double EQ —
+   reopen Settings and Save to fix if ever heard); the reboot command may
+   flash a console window; `;` in a device name is written verbatim into the
+   APO block. Flag any of these if actually hit during testing.
 
 ---
 
