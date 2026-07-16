@@ -469,6 +469,40 @@ def set_app_session(exe: str, pct: int) -> bool:
     return hit
 
 
+def list_app_mutes() -> dict:
+    """lowercase exe -> True if ANY of its sessions is muted."""
+    out = {}
+    try:
+        for s in AudioUtilities.GetAllSessions():
+            if s.Process:
+                exe = s.Process.name().lower()
+                out[exe] = out.get(exe, False) or bool(s.SimpleAudioVolume.GetMute())
+    except Exception as e:
+        log.warning("mute enumeration failed: %s", e)
+    return out
+
+
+def set_app_mute(exe: str, mute: bool) -> bool:
+    """Mute/unmute every audio session of exe. True if any matched."""
+    hit = False
+    try:
+        for s in AudioUtilities.GetAllSessions():
+            if s.Process and s.Process.name().lower() == exe.lower():
+                s.SimpleAudioVolume.SetMute(bool(mute), None)
+                hit = True
+    except Exception as e:
+        log.warning("set mute %s failed: %s", exe, e)
+    return hit
+
+
+def get_system_mute() -> bool:
+    return bool(_default_render_volume().GetMute())
+
+
+def set_system_mute(mute: bool) -> None:
+    _default_render_volume().SetMute(bool(mute), None)
+
+
 class BoostState:
     """Transient ">100%" bookkeeping. boost: exe -> 0..MAX_BOOST extra percent
     shown to the user; ducked: exe -> ORIGINAL session pct before ducking.
@@ -627,9 +661,11 @@ def mixer_key_action(nav: str, key: str) -> tuple[str, int] | None:
 WM_APP_MIXER_ON, WM_APP_MIXER_OFF = 0x8001, 0x8002
 
 # Ephemeral keys held only while the mixer popup is visible — BARE keys
-# (no modifier): ids 100-108 = digits 1-9, 109 = up, 110 = down, 111 = esc.
+# (no modifier): ids 100-108 = digits 1-9, 109 = up, 110 = down, 111 = esc,
+# 112 = left, 113 = right, 114 = M (v1.7 arrow-nav + mute).
 MIXER_KEYS = ([(100 + i, 0, 0x31 + i) for i in range(9)]           # 1..9
-              + [(109, 0, 0x26), (110, 0, 0x28), (111, 0, 0x1B)])  # up, down, esc
+              + [(109, 0, 0x26), (110, 0, 0x28), (111, 0, 0x1B),   # up, down, esc
+                 (112, 0, 0x25), (113, 0, 0x27), (114, 0, 0x4D)])  # left, right, M
 
 
 class HotkeyManager(threading.Thread):
@@ -729,15 +765,18 @@ class HotkeyManager(threading.Thread):
             ctypes.windll.user32.PostThreadMessageW(
                 self._tid, WM_APP_MIXER_ON if on else WM_APP_MIXER_OFF, 0, 0)
 
+    _MIXER_KEYNAMES = {109: "up", 110: "down", 111: "esc",
+                       112: "left", 113: "right", 114: "m"}
+
     def _mixer_hotkey(self, hid):
-        if 100 <= hid <= 108:
-            self.app._mixer_key(("row", hid - 100))
-        elif hid == 109:
-            self.app._mixer_key(("nudge", 2))
-        elif hid == 110:
-            self.app._mixer_key(("nudge", -2))
-        elif hid == 111:
-            self.app._mixer_key(("close", 0))
+        key = (str(hid - 99) if 100 <= hid <= 108
+               else self._MIXER_KEYNAMES.get(hid))
+        if not key:
+            return
+        nav = self.app.cfg.get("mixer_nav", "digits")
+        action = mixer_key_action(nav, key)
+        if action:
+            self.app._mixer_key(action)
 
     def _fire(self, binding):
         try:
@@ -2924,8 +2963,10 @@ class App:
             sessions = list_app_sessions()   # re-read the restored levels
         boost = self.hotkeys.boost if self.hotkeys else BoostState()
         system = get_system_volume()
+        mutes = list_app_mutes()
+        mutes["system"] = get_system_mute()
         rows = build_mixer_rows(self.cfg["hotkeys"]["bindings"], sessions, fg,
-                                boost, system, mutes=None)
+                                boost, system, mutes=mutes)
         self._mixer_rows = rows
         self._mixer_sel = min(self._mixer_sel, len(rows) - 1)
         off, above, below = mixer_viewport(len(rows), self._mixer_sel,
@@ -3018,20 +3059,34 @@ class App:
             if kind == "close":
                 self._hide_mixer()
                 return
-            if kind == "row":
-                # digits address VISIBLE rows — offset into the full list
-                # (Task 4 replaces this handler wholesale; this keeps
-                # selection offset-correct in the meantime)
-                val = self._mixer_off + val
-                if val < len(self._mixer_rows):
-                    self._mixer_sel = val
-            elif kind == "nudge":
+            if kind == "select":
+                if self._mixer_off + val < len(self._mixer_rows):
+                    self._mixer_sel = self._mixer_off + val
+            elif kind == "move":
+                self._mixer_sel = max(0, min(len(self._mixer_rows) - 1,
+                                             self._mixer_sel + val))
+            elif kind == "mute":
                 row = self._mixer_rows[self._mixer_sel]
                 if row["key"] == "system":
+                    set_system_mute(not get_system_mute())
+                else:
+                    exe = row.get("exe")
+                    if exe:
+                        set_app_mute(exe, not row.get("muted"))
+            elif kind == "nudge":
+                row = self._mixer_rows[self._mixer_sel]
+                if row.get("muted"):
+                    # nudging a muted row unmutes it first (Windows-mixer feel)
+                    if row["key"] == "system":
+                        set_system_mute(False)
+                    else:
+                        exe = row.get("exe")
+                        if exe:
+                            set_app_mute(exe, False)
+                elif row["key"] == "system":
                     adjust_system_volume(val)
                 else:
-                    exe = (get_foreground_exe() if row["key"] == "active"
-                           else row["label"])
+                    exe = row.get("exe")
                     if exe:
                         sessions = list_app_sessions()
                         if exe.lower() in sessions:
