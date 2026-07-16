@@ -658,6 +658,13 @@ def mixer_viewport(n_rows: int, selected: int, offset: int):
     return offset, offset > 0, offset + MIXER_VISIBLE < n_rows
 
 
+def mixer_select_ok(val: int, offset: int, n_rows: int) -> bool:
+    """PURE bounds check for a digit-select press: `val` (0-8, digit 1-9)
+    must land on a row that is both visible (within the MIXER_VISIBLE-row
+    window) and within the row list."""
+    return val < MIXER_VISIBLE and offset + val < n_rows
+
+
 def mixer_key_action(nav: str, key: str) -> tuple[str, int] | None:
     """PURE map of a mixer key press to an action, per navigation mode.
     digits (default): 1-9 select a visible row, up/down nudge the volume.
@@ -1230,7 +1237,8 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 <div class="switchrow">
   <div><div class="lab">Mixer navigation</div>
        <div class="hint">How the Shift+F3 popup's keys work while it's open</div></div>
-  <div class="select-wrap"><select id="mixnav">
+  <div class="select-wrap"><select id="mixnav"
+    onchange="S && (S.mixerNav = this.value)">
     <option value="digits">1&ndash;9 pick &middot; &#8593;&#8595; volume</option>
     <option value="arrows">&#8593;&#8595; pick &middot; &#8592;&#8594; volume</option>
   </select></div>
@@ -1238,7 +1246,8 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 <div class="switchrow">
   <div><div class="lab">Live level pulse on mixer bars</div>
        <div class="hint">Each row's bar dances with that app's real-time audio (only polls while the popup is open)</div></div>
-  <label class="switch"><input type="checkbox" id="sw_mixmeters"><span class="knob"></span></label>
+  <label class="switch"><input type="checkbox" id="sw_mixmeters"
+    onchange="S && (S.mixerMeters = this.checked)"><span class="knob"></span></label>
 </div>
 
 <hr>
@@ -1999,6 +2008,8 @@ class App:
         self._mixer_sel = 0
         self._mixer_off = 0             # rolodex viewport offset (v1.7)
         self._mixer_rows = []           # last build_mixer_rows() output (Task 5 reads it)
+        self._mixer_visible = False     # True between _show_mixer and _hide_mixer
+        self._mixer_vis_n = None        # visible-row count as of the last resize (I2)
         self.hotkeys = None             # HotkeyManager while hotkeys are enabled
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
@@ -3005,10 +3016,29 @@ class App:
         footer = ("Esc closes · ↑↓ pick · ←→ volume · M mute · 1–9 jump"
                   if nav == "arrows" else
                   "Esc closes · 1–9 pick · ↑↓ volume · M mute")
-        model = {"rows": rows[off:off + MIXER_VISIBLE],
+        visible_rows = rows[off:off + MIXER_VISIBLE]
+        model = {"rows": visible_rows,
                  "selected": self._mixer_sel - off,
                  "dotsAbove": above, "dotsBelow": below, "footer": footer}
         self._mixer_win.evaluate_js(f"setMixer({json.dumps(model)})")
+        # v1.7: the rest tier can add/drop rows while the popup is already
+        # open (live sessions), which changes the visible-row count without
+        # a close/reopen. Re-measure/resize ONLY when that count changed —
+        # scrolling (offset changes, same visible count) must stay a no-op
+        # to preserve the no-jitter guarantee.
+        vis_n = len(visible_rows)
+        if self._mixer_visible and vis_n != self._mixer_vis_n:
+            self._mixer_vis_n = vis_n
+            try:
+                h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
+                h = int(h)
+                self._mixer_win.resize(MIXER_W, h)
+                x, y = self._mixer_position(h)
+                self._mixer_win.move(x, y)
+            except Exception as e:
+                log.warning("mixer resize-on-count-change failed: %s", e)
+        else:
+            self._mixer_vis_n = vis_n
 
     def _mixer_position(self, h):
         """Bottom-center of the monitor the cursor is on, 80 px up from the
@@ -3050,12 +3080,15 @@ class App:
             self._prime_mixer_window()
         self._mixer_sel = 0
         self._mixer_off = 0
+        self._mixer_vis_n = None        # force a fresh measurement below (I2)
+        self._mixer_visible = False     # _refresh_mixer must not self-resize here
         self._refresh_mixer()                        # builds model + setMixer
         # height to content, then place bottom-center of the CURSOR's monitor
         h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
         self._mixer_win.resize(MIXER_W, int(h))
         x, y = self._mixer_position(int(h))
         self._show_noactivate(self._mixer_win, f"{APP_NAME} Mixer", x, y)
+        self._mixer_visible = True      # now _refresh_mixer may resize on count change
         self._arm_mixer_timer()                      # each key press re-arms it
         if self.hotkeys:
             self.hotkeys.set_mixer_keys(True)
@@ -3122,6 +3155,7 @@ class App:
         self._mixmeter_stop = None
 
     def _hide_mixer(self):
+        self._mixer_visible = False
         self._stop_mixer_meters()
         # release the ephemeral keys FIRST — the popup must never hide while
         # digits/arrows are still swallowed globally
@@ -3144,7 +3178,7 @@ class App:
                 self._hide_mixer()
                 return
             if kind == "select":
-                if self._mixer_off + val < len(self._mixer_rows):
+                if mixer_select_ok(val, self._mixer_off, len(self._mixer_rows)):
                     self._mixer_sel = self._mixer_off + val
             elif kind == "move":
                 self._mixer_sel = max(0, min(len(self._mixer_rows) - 1,

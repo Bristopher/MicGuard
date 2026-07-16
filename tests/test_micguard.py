@@ -320,5 +320,29 @@ class TestMixerViewport(unittest.TestCase):
         self.assertFalse(below)
 
 
+class TestMixerSelectOk(unittest.TestCase):
+    """Composition test for I1: a digit-select press must be rejected once it
+    would land outside the visible MIXER_VISIBLE-row window, even though the
+    absolute row it would land on still exists in the full row list."""
+
+    def test_digit_beyond_viewport_rejected(self):
+        # 12 rows, offset 3 (viewport shows rows 3-9, badges 1-7).
+        # digit "9" -> val=8 (mixer_key_action maps "9" to select,8) is
+        # beyond MIXER_VISIBLE (7) even though 3+8=11 < 12 rows exist.
+        self.assertFalse(m.mixer_select_ok(8, 3, 12))
+
+    def test_digit_within_viewport_accepted(self):
+        # digit "7" -> val=6 -> row 3+6=9, the last visible row (badge 7).
+        self.assertTrue(m.mixer_select_ok(6, 3, 12))
+
+    def test_val_within_viewport_but_beyond_row_list_rejected(self):
+        # offset 3, only 5 total rows: val=3 -> row 6, which doesn't exist.
+        self.assertFalse(m.mixer_select_ok(3, 3, 5))
+
+    def test_mid_range_accepted(self):
+        # offset 0, 10 rows: val=2 (digit "3") -> row 2, valid and visible.
+        self.assertTrue(m.mixer_select_ok(2, 0, 10))
+
+
 if __name__ == "__main__":
     unittest.main()
