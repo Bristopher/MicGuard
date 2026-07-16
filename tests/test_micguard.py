@@ -483,5 +483,24 @@ class TestEqDeviceName(unittest.TestCase):
         self.assertIsNone(m.eq_device_name(cfg, None))
 
 
+class TestEqFallbackFollowsNewMic(unittest.TestCase):
+    """Pins the fix for the Task 5 Critical finding: _apply_mic_eq must be
+    driven by the fallback callback's fresh entry, not the Enforcer's
+    not-yet-updated `enforced` dict, or the EQ block targets the mic that
+    was just lost instead of the one that just took over."""
+    CFG = {"profiles": [{"name": "P",
+                         "mics": [{"id": "a", "name": "TopMic", "volume": 85},
+                                  {"id": "b", "name": "BackupMic", "volume": 60}],
+                         "outputs": []}], "active_profile": "P"}
+
+    def test_switchover_entry_wins_over_stale_state(self):
+        # the fallback callback carries the NEW device; the EQ must target it
+        new = {"id": "b", "name": "BackupMic", "volume": 60}
+        self.assertEqual(m.eq_device_name(self.CFG, new), "BackupMic")
+
+    def test_mic_gone_falls_back_to_profile_head(self):
+        self.assertEqual(m.eq_device_name(self.CFG, None), "TopMic")
+
+
 if __name__ == "__main__":
     unittest.main()

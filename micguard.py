@@ -1014,6 +1014,9 @@ def ensure_include_line(config_text: str) -> str | None:
     return config_text + EQ_INCLUDE_LINE + "\n"
 
 
+_EQ_UNSET = object()  # sentinel: "no override given" (an entry can legitimately be None)
+
+
 def eq_device_name(cfg: dict, enforced_capture: dict | None) -> str | None:
     """The device name the EQ block targets: the mic the Enforcer is
     actually holding right now, falling back to the active profile's top
@@ -3181,7 +3184,8 @@ class App:
             else:
                 return
             log.info("fallback alert: %s — %s", title, sub)
-            self._apply_mic_eq()
+            if flow_label == "capture":
+                self._apply_mic_eq(enforced_override=now_entry)
             if not self.cfg.get("notify_fallback"):
                 return
             rect = popup_monitor_rect()
@@ -3619,12 +3623,17 @@ class App:
                 "enabled": eq["enabled"], "gainDb": eq["gain_db"],
                 "bassDb": eq["bass_db"], "error": getattr(self, "_eq_error", "")}
 
-    def _apply_mic_eq(self):
+    def _apply_mic_eq(self, enforced_override=_EQ_UNSET):
         """Render + write the extension's APO block for the active profile
         and currently-enforced mic. No-op (and no error noise) when the
         extension isn't installed. Called from settings save, tray profile
         switch, and the Enforcer's fallback path — cheap (change-only write)
-        and never raises."""
+        and never raises.
+
+        enforced_override, when passed, is used as the capture-flow entry
+        instead of reading self.enforcer.enforced — the fallback callback
+        fires before the Enforcer updates that dict, so it must hand us the
+        fresh entry directly rather than let us read the stale one."""
         try:
             self._eq_error = ""
             cfg_dir = apo_config_dir()
@@ -3633,8 +3642,9 @@ class App:
             prof = next((p for p in self.cfg["profiles"]
                          if p["name"] == self.cfg.get("active_profile")),
                         self.cfg["profiles"][0])
-            enforced = (self.enforcer.enforced.get("capture")
-                        if self.enforcer else None)
+            enforced = (enforced_override if enforced_override is not _EQ_UNSET
+                        else (self.enforcer.enforced.get("capture")
+                              if self.enforcer else None))
             self._eq_error = write_eq_config(
                 cfg_dir, eq_device_name(self.cfg, enforced), mic_eq_of(prof))
         except Exception as e:
