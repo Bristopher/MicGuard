@@ -229,5 +229,18 @@ class TestBuildMixerRows(unittest.TestCase):
         self.assertIn("(", rows[-1]["label"])                  # "Active window (—)"
 
 
+class TestMixerSettings(unittest.TestCase):
+    def test_defaults_present(self):
+        self.assertEqual(m.DEFAULT_CONFIG["mixer_nav"], "digits")
+        self.assertIs(m.DEFAULT_CONFIG["mixer_meters"], True)
+
+    def test_old_config_gains_keys_via_merge(self):
+        old = {"profiles": [{"name": "Default", "mics": [], "outputs": []}],
+               "active_profile": "Default"}
+        cfg = m.DEFAULT_CONFIG | m.migrate_config(old)
+        self.assertEqual(cfg["mixer_nav"], "digits")
+        self.assertIs(cfg["mixer_meters"], True)
+
+
 if __name__ == "__main__":
     unittest.main()
