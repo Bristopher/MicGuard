@@ -466,5 +466,22 @@ class TestMicEqPersistence(unittest.TestCase):
                          {"enabled": True, "gain_db": 7.5, "bass_db": 3.0})
 
 
+class TestEqDeviceName(unittest.TestCase):
+    CFG = {"profiles": [{"name": "P", "mics": [{"id": "a", "name": "TopMic", "volume": 85}],
+                         "outputs": []}], "active_profile": "P"}
+
+    def test_enforced_mic_wins(self):
+        self.assertEqual(m.eq_device_name(self.CFG, {"id": "b", "name": "LiveMic"}),
+                         "LiveMic")
+
+    def test_falls_back_to_profile_head(self):
+        self.assertEqual(m.eq_device_name(self.CFG, None), "TopMic")
+
+    def test_none_when_no_mics(self):
+        cfg = {"profiles": [{"name": "P", "mics": [], "outputs": []}],
+               "active_profile": "P"}
+        self.assertIsNone(m.eq_device_name(cfg, None))
+
+
 if __name__ == "__main__":
     unittest.main()

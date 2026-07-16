@@ -1014,6 +1014,16 @@ def ensure_include_line(config_text: str) -> str | None:
     return config_text + EQ_INCLUDE_LINE + "\n"
 
 
+def eq_device_name(cfg: dict, enforced_capture: dict | None) -> str | None:
+    """The device name the EQ block targets: the mic the Enforcer is
+    actually holding right now, falling back to the active profile's top
+    pick before the first enforce pass has run."""
+    if enforced_capture and enforced_capture.get("name"):
+        return enforced_capture["name"]
+    mics, _ = active_profile_lists(cfg)
+    return mics[0]["name"] if mics else None
+
+
 def apo_config_dir() -> str | None:
     """Equalizer APO's config directory, or None when not installed.
     Registry first (the installer writes ConfigPath), Program Files as a
@@ -2966,6 +2976,7 @@ class App:
                     app.enforcer._set_once_done.clear()
                     app.enforcer.reattach()
                     app.enforcer.poke()
+                    app._apply_mic_eq()
                 try:
                     app._menu_win.evaluate_js("refreshMenu()")
                 except Exception:
@@ -3170,6 +3181,7 @@ class App:
             else:
                 return
             log.info("fallback alert: %s — %s", title, sub)
+            self._apply_mic_eq()
             if not self.cfg.get("notify_fallback"):
                 return
             rect = popup_monitor_rect()
@@ -3608,8 +3620,25 @@ class App:
                 "bassDb": eq["bass_db"], "error": getattr(self, "_eq_error", "")}
 
     def _apply_mic_eq(self):
-        """Render + write the EQ block for the active profile/mic (Task 5)."""
-        self._eq_error = ""
+        """Render + write the extension's APO block for the active profile
+        and currently-enforced mic. No-op (and no error noise) when the
+        extension isn't installed. Called from settings save, tray profile
+        switch, and the Enforcer's fallback path — cheap (change-only write)
+        and never raises."""
+        try:
+            self._eq_error = ""
+            cfg_dir = apo_config_dir()
+            if not cfg_dir:
+                return
+            prof = next((p for p in self.cfg["profiles"]
+                         if p["name"] == self.cfg.get("active_profile")),
+                        self.cfg["profiles"][0])
+            enforced = (self.enforcer.enforced.get("capture")
+                        if self.enforcer else None)
+            self._eq_error = write_eq_config(
+                cfg_dir, eq_device_name(self.cfg, enforced), mic_eq_of(prof))
+        except Exception as e:
+            log.warning("mic EQ apply failed: %s", e)
 
     def _patch_tray_clicks(self):
         """Reroute tray clicks: left → Settings, right → the themed menu.
