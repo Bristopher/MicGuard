@@ -25,6 +25,7 @@ about doesn't exist.
 | [Future/Auto-Profile-Switch-On-App-Launch](Future/Auto-Profile-Switch-On-App-Launch.md) | Parked: auto-activate a profile when a mapped app launches (trigger candidates table, config/UI sketch) |
 | [superpowers/plans/2026-07-15 mixer-nav-rolodex-meters](superpowers/plans/2026-07-15-mixer-nav-rolodex-meters.md) | v1.7 implementation plan — 6 TDD tasks (nav-mode/viewport pure cores, mute helpers, meter pump, docs+test build) |
 | [superpowers/specs/2026-07-16 mic-eq-extension](superpowers/specs/2026-07-16-mic-eq-extension-design.md) | Approved v1.8 design: optional in-app Mic EQ extension (real gain boost + bass boost via Equalizer APO), per-profile, automated guided setup |
+| [superpowers/plans/2026-07-16 mic-eq-extension](superpowers/plans/2026-07-16-mic-eq-extension.md) | v1.8 implementation plan — 6 TDD tasks (pure renderer/writer cores, settings card, guided setup, enforcement wiring, docs+test build) |
 | [Future/Same-Monitor-Overlay-Exclusive-Fullscreen](Future/Same-Monitor-Overlay-Exclusive-Fullscreen.md) | Parked: same-monitor popups over exclusive fullscreen — options table (injection ❌ anti-cheat, z-band ❌ privileged, FSO/borderless ✅, Game Bar widget = future route) |
 
 ## Lifecycle folders
