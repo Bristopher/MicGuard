@@ -182,6 +182,25 @@ def get_endpoint_meter(device_id: str):
     return cast(interface, POINTER(IAudioMeterInformation))
 
 
+def get_session_meters() -> dict:
+    """lowercase exe -> IAudioMeterInformation for that exe's first session.
+    Sessions expose the meter via QueryInterface on the session control."""
+    from pycaw.api.endpointvolume import IAudioMeterInformation
+    out = {}
+    try:
+        for s in AudioUtilities.GetAllSessions():
+            if s.Process:
+                exe = s.Process.name().lower()
+                if exe not in out:
+                    try:
+                        out[exe] = s._ctl.QueryInterface(IAudioMeterInformation)
+                    except Exception:
+                        pass          # some apps expose no meter — row shows 0
+    except Exception as e:
+        log.warning("session meter enumeration failed: %s", e)
+    return out
+
+
 def _co_initialize():
     """CoInitialize for webview js_api worker threads — idempotent, never
     raises. Rule 2: any thread that touches Core Audio initializes COM first."""
@@ -1737,6 +1756,9 @@ body{color:#fafafa;padding:0;user-select:none;overflow:hidden;
           background:rgba(255,255,255,.18)}
 .bar .over{display:block;position:absolute;top:0;right:0;height:100%;
            background:#4ade80;border-radius:0 999px 999px 0}
+.bar .pulse{display:block;position:absolute;top:0;left:0;height:100%;
+            background:rgba(134,239,172,.5);border-radius:999px;width:0;
+            transition:width .05s linear}
 .pct{width:44px;text-align:right;font:600 12px Consolas,monospace;flex:none}
 .pct .b{color:#4ade80}
 .pct.na{width:auto;max-width:64px;text-align:right;color:#52525b;
@@ -1775,7 +1797,7 @@ function setMixer(model){
       <span class="info"><span class="name">${esc(r.label)}${
         r.ducked ? `<span class="duck">ducked &minus;${r.ducked}%</span>` : ''}${
         r.muted ? `<span class="mut">muted</span>` : ''}</span>
-        <span class="bar"><span class="fill" style="width:${fill}%"></span><span class="div"></span>${
+        <span class="bar" data-k="${esc(r.key)}"><span class="fill" style="width:${fill}%"></span><span class="pulse"></span><span class="div"></span>${
           over ? `<span class="over" style="width:${over}%"></span>` : ''}</span></span>
       ${pctHtml}
       ${r.chip ? `<span class="chip">${esc(r.chip)}</span>` : ''}
@@ -1785,6 +1807,12 @@ function setMixer(model){
   document.getElementById('dotsup').className = 'dots' + (model.dotsAbove ? ' on' : '');
   document.getElementById('dotsdn').className = 'dots' + (model.dotsBelow ? ' on' : '');
   if (model.footer) document.querySelector('.foot').textContent = model.footer;
+}
+function setLevels(levels){
+  document.querySelectorAll('.bar').forEach(b => {
+    const v = levels[b.dataset.k] || 0;
+    b.querySelector('.pulse').style.width = (Math.min(1, v) * 75) + '%';
+  });
 }
 </script></body></html>"""
 
@@ -1975,6 +2003,7 @@ class App:
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
         self._meter_device_id = (self._current_mic() or {}).get("id")
+        self._mixmeter_stop = None      # Event stopping the mixer level-pulse pump
 
     # ---- tray ----
 
@@ -3030,6 +3059,7 @@ class App:
         self._arm_mixer_timer()                      # each key press re-arms it
         if self.hotkeys:
             self.hotkeys.set_mixer_keys(True)
+        self._start_mixer_meters()
 
     def _arm_mixer_timer(self):
         if self._mixer_timer:
@@ -3038,7 +3068,61 @@ class App:
         self._mixer_timer.daemon = True
         self._mixer_timer.start()
 
+    def _start_mixer_meters(self):
+        """20 Hz level-pulse pump; exists only while the mixer is visible.
+        COM discipline per AI-guide #11/#12: locals nulled + gc.collect()
+        BEFORE CoUninitialize; stop event is _stop_evt-style, never _stop."""
+        self._stop_mixer_meters()
+        if not self.cfg.get("mixer_meters", True):
+            return
+        stop = threading.Event()
+        self._mixmeter_stop = stop
+        win = self._mixer_win
+
+        def pump():
+            import gc
+            import comtypes
+            comtypes.CoInitialize()
+            meters = sysmeter = None
+            try:
+                meters = get_session_meters()
+                try:
+                    did = AudioUtilities.GetSpeakers().GetId()
+                    sysmeter = get_endpoint_meter(did)
+                except Exception:
+                    sysmeter = None
+                while not stop.wait(0.05):
+                    levels = {}
+                    for row in list(self._mixer_rows):
+                        try:
+                            if row["key"] == "system":
+                                if sysmeter is not None:
+                                    levels[row["key"]] = round(sysmeter.GetPeakValue(), 3)
+                            else:
+                                mt = meters.get(row.get("exe"))
+                                if mt is not None:
+                                    levels[row["key"]] = round(mt.GetPeakValue(), 3)
+                        except Exception:
+                            pass      # session died mid-pump — row just stops pulsing
+                    try:
+                        win.evaluate_js(f"setLevels({json.dumps(levels)})")
+                    except Exception:
+                        break         # window gone — end the pump
+            finally:
+                meters = sysmeter = None
+                gc.collect()          # release COM pointers BEFORE CoUninitialize
+                comtypes.CoUninitialize()
+
+        threading.Thread(target=pump, daemon=True, name="mixer-meter").start()
+
+    def _stop_mixer_meters(self):
+        evt = getattr(self, "_mixmeter_stop", None)
+        if evt:
+            evt.set()
+        self._mixmeter_stop = None
+
     def _hide_mixer(self):
+        self._stop_mixer_meters()
         # release the ephemeral keys FIRST — the popup must never hide while
         # digits/arrows are still swallowed globally
         if self.hotkeys:
