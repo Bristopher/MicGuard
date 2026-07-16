@@ -24,6 +24,8 @@ APP_NAME = "MicGuard"
 VERSION = "1.7.0"
 GITHUB_REPO = "Bristopher/MicGuard"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
+EQ_SITE_URL = "https://sourceforge.net/projects/equalizerapo/"
+EQ_DOWNLOAD_URL = "https://sourceforge.net/projects/equalizerapo/files/latest/download"
 CONFIG_DIR = os.path.join(os.environ["APPDATA"], APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 LOG_PATH = os.path.join(CONFIG_DIR, "micguard.log")
@@ -2464,6 +2466,61 @@ class App:
             webbrowser.open(RELEASES_URL)
         return ""
 
+    def _setup_mic_eq(self) -> dict:
+        """Guided Equalizer APO setup (spec §2). Automates everything except
+        the three consents Windows requires: UAC, the Configurator checkbox,
+        the reboot. Never silent (product rule). Returns {ok, msg}."""
+        if apo_config_dir():
+            return {"ok": True, "msg": "Equalizer APO is already installed — reopen Settings after a reboot if the sliders are missing."}
+        if not self._dialog(
+            "askyesno",
+            "Set up Mic EQ?\n\n"
+            "MicGuard will download Equalizer APO (free, open source) from "
+            "SourceForge and start its installer. You'll need to:\n"
+            "1) approve the Windows admin prompt,\n"
+            "2) tick YOUR MICROPHONE on the Capture tab when the Configurator "
+            "opens at the end of the install,\n"
+            "3) reboot when asked.\n\nDownload and start now?",
+            yes="Download & install", no="Not now",
+        ):
+            return {"ok": False, "msg": ""}
+        try:
+            import tempfile
+            req = urllib.request.Request(EQ_DOWNLOAD_URL,
+                                         headers={"User-Agent": APP_NAME})
+            path = os.path.join(tempfile.gettempdir(), "EqualizerAPO-setup.exe")
+            with urllib.request.urlopen(req, timeout=60) as resp, \
+                 open(path, "wb") as out:
+                data = resp.read()
+                if len(data) < 1_000_000:          # sanity: installer is ~10 MB
+                    raise RuntimeError(f"download too small ({len(data)} bytes)")
+                out.write(data)
+            os.startfile(path)                     # installer elevates itself (UAC)
+        except Exception as e:
+            log.warning("mic EQ setup download failed: %s", e)
+            self._dialog("info",
+                         "The download didn't work — opening the Equalizer APO "
+                         "page so you can grab the installer yourself.\n\n"
+                         "Install it, tick your mic on the Capture tab, reboot, "
+                         "and the Mic EQ card will light up on its own.")
+            webbrowser.open(EQ_SITE_URL)
+            return {"ok": False, "msg": "download failed — page opened instead"}
+        # poll for the install to land (config dir appears), up to 10 minutes
+        for _ in range(120):
+            time.sleep(5)
+            cfg_dir = apo_config_dir()
+            if cfg_dir:
+                self._apply_mic_eq()               # pre-write so EQ is live post-reboot
+                if self._dialog(
+                    "askyesno",
+                    "Equalizer APO is installed. Windows needs a reboot before "
+                    "it starts processing your mic.\n\nReboot now?",
+                    yes="Reboot now", no="Later",
+                ):
+                    os.system("shutdown /r /t 5")
+                return {"ok": True, "msg": "installed — sliders appear after the reboot"}
+        return {"ok": False, "msg": "installer still running? reopen Settings when it finishes"}
+
     def _dialog(self, kind: str, message: str, yes: str = "Yes", no: str = "No"):
         """Frameless webview dialog; blocks the calling thread until answered.
         Never call from the main thread (it runs webview's loop)."""
@@ -2741,7 +2798,7 @@ class App:
                 return app._update_check(quiet=True)
 
             def setup_eq(self_api):
-                return {"ok": False, "msg": "setup flow lands in the next task"}
+                return app._setup_mic_eq()
 
             def open_url(self_api, url):
                 if str(url).startswith("https://"):
