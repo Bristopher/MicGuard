@@ -1833,9 +1833,14 @@ let saveMsgTimer = null;
 function showSaved(r){
   const el = document.getElementById('savemsg');
   const fails = (r && r.hotkeyFailures) || [];
+  const eqErr = (r && r.micEqError) || '';
   if (fails.length){
     el.textContent = `Saved — ${fails.join(', ')} in use by another app`;
     el.title = el.textContent;
+    el.className = 'show warn';
+  } else if (eqErr){
+    el.textContent = 'Saved — Mic EQ write failed';
+    el.title = eqErr;
     el.className = 'show warn';
   } else {
     el.textContent = 'Saved ✓';
@@ -1843,7 +1848,7 @@ function showSaved(r){
     el.className = 'show';
   }
   if (saveMsgTimer) clearTimeout(saveMsgTimer);
-  saveMsgTimer = setTimeout(() => { el.className = ''; }, fails.length ? 6000 : 2500);
+  saveMsgTimer = setTimeout(() => { el.className = ''; }, (fails.length || eqErr) ? 6000 : 2500);
 }
 async function save(){
   const strip = l => l.map(d => { const c = {...d}; delete c.connected; return c; });
@@ -1863,6 +1868,8 @@ async function save(){
   });
   S.hotkeyFailures = (r && r.hotkeyFailures) || [];
   renderHk();  // repaint red markers on combos another app holds
+  if (r && r.micEqError){ S.micEq.error = r.micEqError; }
+  paintEq();   // surface a write failure (e.g. unwritable config dir) on the card
   showSaved(r);
 }
 </script></body></html>"""
@@ -2334,6 +2341,16 @@ class App:
         import pystray
         import webview
         self.enforcer.start()
+        # Re-assert the Mic EQ file at startup — otherwise a fallback that
+        # happened last session (rewriting MicGuard-Mic.txt to the backup
+        # mic) never gets corrected on the next boot, since the Enforcer's
+        # first pass has prev=None and never fires on_fallback (final-review
+        # I1). 3s gives the first enforce pass time to settle; the write is
+        # change-only and _apply_mic_eq never raises, so this is free when
+        # nothing drifted.
+        _eq_startup_timer = threading.Timer(3.0, self._apply_mic_eq)
+        _eq_startup_timer.daemon = True
+        _eq_startup_timer.start()
         threading.Thread(target=self._startup_update_check, daemon=True).start()
         menu = pystray.Menu(
             pystray.MenuItem(self._status_text, None, enabled=False),
@@ -2629,7 +2646,7 @@ class App:
                     "notifyFallback": bool(app.cfg["notify_fallback"]),
                     "mixerNav": app.cfg.get("mixer_nav", "digits"),
                     "mixerMeters": bool(app.cfg.get("mixer_meters", True)),
-                    "micEq": app._mic_eq_state(),
+                    "micEq": app._mic_eq_state(sel),
                     "version": VERSION,
                     "recommended": RECOMMENDED_VOLUME,
                     "sessions": _session_names(),
@@ -3608,12 +3625,13 @@ class App:
             mgr._ready.wait(timeout=wait)
         return list(mgr.failed)
 
-    def _mic_eq_state(self) -> dict:
-        """Settings-card model for the Mic EQ extension (spec §1)."""
+    def _mic_eq_state(self, prof: dict) -> dict:
+        """Settings-card model for the Mic EQ extension (spec §1). `prof` is
+        the profile dict the caller is displaying (get_state's dropdown-
+        selected `sel`) — NOT necessarily the active profile. Using the
+        active profile here regardless of what get_state resolved caused
+        cross-profile EQ contamination on save (final-review C1)."""
         cfg_dir = apo_config_dir()
-        prof = next((p for p in self.cfg["profiles"]
-                     if p["name"] == self.cfg.get("active_profile")),
-                    self.cfg["profiles"][0])
         eq = mic_eq_of(prof)
         enforced = (self.enforcer.enforced.get("capture") or {}) if self.enforcer else {}
         processed = True

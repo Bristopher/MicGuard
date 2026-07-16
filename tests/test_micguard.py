@@ -465,6 +465,24 @@ class TestMicEqPersistence(unittest.TestCase):
         self.assertEqual(m.mic_eq_of(prof),
                          {"enabled": True, "gain_db": 7.5, "bass_db": 3.0})
 
+    def test_reads_the_passed_profile_not_some_other_one(self):
+        """Regression pin for final-review C1 (cross-profile EQ
+        contamination): _mic_eq_state must be handed the dropdown-selected
+        profile dict and read ITS mic_eq block, not the active profile's.
+        This pins the contract at the mic_eq_of level — the two profiles
+        below have deliberately different EQ so a caller passing the wrong
+        dict is caught immediately. The full UI round-trip (get_state ->
+        paintEq -> save) is only exercisable in a browser harness."""
+        streaming = {"name": "Streaming", "mics": [], "outputs": [],
+                     "mic_eq": {"enabled": True, "gain_db": 6.0, "bass_db": 2.0}}
+        gaming = {"name": "Gaming", "mics": [], "outputs": [],
+                  "mic_eq": {"enabled": False, "gain_db": 0.0, "bass_db": 0.0}}
+        self.assertEqual(m.mic_eq_of(gaming),
+                         {"enabled": False, "gain_db": 0.0, "bass_db": 0.0})
+        self.assertEqual(m.mic_eq_of(streaming),
+                         {"enabled": True, "gain_db": 6.0, "bass_db": 2.0})
+        self.assertNotEqual(m.mic_eq_of(gaming), m.mic_eq_of(streaming))
+
 
 class TestEqDeviceName(unittest.TestCase):
     CFG = {"profiles": [{"name": "P", "mics": [{"id": "a", "name": "TopMic", "volume": 85}],
