@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-16 — §11 added: v1.7 mixer nav modes/rolodex/level pulse/M mute (pre-stamped 1.7.0 test build); fixed a real bug found during the Task 6 sweep (System row level pulse never resolved — see §11)
+**Updated:** 2026-07-16 — §11 added (v1.7) + item 6: exclusive-fullscreen popups now fall back to the game-free monitor instead of hiding (R6 Siege report)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `f26a9c5..3aa9696` (2026-07-15, v1.7 implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§11 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -360,6 +360,19 @@ testing below.
    Save (without closing the mixer) — the footer text should update on the
    mixer's NEXT keypress-triggered refresh (not necessarily instantly), since
    the mixer reads `cfg` live rather than caching it at open time.
+6. **Exclusive fullscreen → popups on the OTHER monitor (your 2026-07-16 "R6
+   Siege shift+F3 doesn't appear" report).** v1.6.1 suppressed all popups in
+   exclusive fullscreen (showing them over the game minimized it). Now
+   `popup_monitor_rect()` picks a monitor the game does NOT own: mixer/OSD/
+   fallback alerts appear on your second monitor while Siege runs exclusive
+   fullscreen on the first; suppression only remains for single-monitor
+   setups. Verify in Siege (Fullscreen, not Borderless): (a) shift+F3 → the
+   mixer appears bottom-center of the OTHER monitor and the game does NOT
+   minimize; digits/arrows/M still work (global hotkeys, no focus needed);
+   (b) ctrl+↑ → OSD on the other monitor, game stays up; (c) log shows
+   "suppressed" ONLY if you ever run a game exclusive on your only monitor.
+   Judgment: is other-monitor placement discoverable enough, or do you want
+   the popup to also flash/animate to catch your eye over there?
 
 ---
 

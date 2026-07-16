@@ -442,6 +442,64 @@ def exclusive_fullscreen_active() -> bool:
     return False
 
 
+def _enum_monitor_work_rects() -> list[tuple[int, tuple[int, int, int, int]]]:
+    """[(hmonitor, (x, y, w, h) work-area rect), ...] for every display."""
+    u = ctypes.windll.user32
+    out = []
+    proc_t = ctypes.WINFUNCTYPE(
+        ctypes.wintypes.BOOL, ctypes.wintypes.HMONITOR, ctypes.wintypes.HDC,
+        ctypes.POINTER(ctypes.wintypes.RECT), ctypes.wintypes.LPARAM)
+
+    def _cb(mon, _hdc, _rect, _lp):
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if u.GetMonitorInfoW(mon, ctypes.byref(mi)):
+            out.append((int(mon), (mi.rcWork.left, mi.rcWork.top,
+                                   mi.rcWork.right - mi.rcWork.left,
+                                   mi.rcWork.bottom - mi.rcWork.top)))
+        return True
+
+    u.EnumDisplayMonitors(None, None, proc_t(_cb), 0)
+    return out
+
+
+def popup_monitor_rect() -> tuple[int, int, int, int] | None:
+    """Work rect (x, y, w, h) of the monitor a popup may safely appear on.
+    Normally the cursor's monitor. When a D3D exclusive-fullscreen app is
+    foreground, drawing on ITS monitor breaks exclusive mode and minimizes
+    the game (Bristopher, R6 Siege 2026-07-16) — so pick a monitor the game
+    does NOT own instead; None (= suppress the popup) only when the game
+    owns the only monitor."""
+    u = ctypes.windll.user32
+    MONITOR_DEFAULTTONEAREST = 2
+    # HMONITOR is pointer-sized; the default c_int restype truncates on x64
+    u.MonitorFromPoint.restype = ctypes.wintypes.HMONITOR
+    u.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
+    u.MonitorFromWindow.restype = ctypes.wintypes.HMONITOR
+    exclusive = exclusive_fullscreen_active()
+    monitors = _enum_monitor_work_rects()
+    if not monitors:
+        if exclusive:
+            return None
+        import webview
+        s = webview.screens[0]
+        return (0, 0, s.width, s.height)
+    rects = dict(monitors)
+    pt = ctypes.wintypes.POINT()
+    u.GetCursorPos(ctypes.byref(pt))
+    cursor_mon = int(u.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) or 0)
+    if not exclusive:
+        return rects.get(cursor_mon, monitors[0][1])
+    game_mon = int(u.MonitorFromWindow(u.GetForegroundWindow(),
+                                       MONITOR_DEFAULTTONEAREST) or 0)
+    if cursor_mon != game_mon and cursor_mon in rects:
+        return rects[cursor_mon]
+    for mon, rect in monitors:
+        if mon != game_mon:
+            return rect
+    return None
+
+
 def get_foreground_exe() -> str | None:
     """Exe name of the process owning the foreground window (original case),
     or None (no window / lookup failure / our own process)."""
@@ -2838,10 +2896,10 @@ class App:
             log.info("fallback alert: %s — %s", title, sub)
             if not self.cfg.get("notify_fallback"):
                 return
-            if exclusive_fullscreen_active():
-                log.info("fallback alert suppressed: exclusive fullscreen")
+            rect = popup_monitor_rect()
+            if rect is None:
+                log.info("fallback alert suppressed: exclusive fullscreen owns the only monitor")
                 return
-            import webview
             if self._alert_win is None:
                 self._make_alert_window()
             if not self._alert_primed:
@@ -2851,10 +2909,10 @@ class App:
                 self._prime_alert_window()
             self._alert_win.evaluate_js(
                 f"setAlert({json.dumps(kind)}, {json.dumps(title)}, {json.dumps(sub)})")
-            screen = webview.screens[0]
+            mx, my, mw, mh = rect
             self._show_noactivate(self._alert_win, f"{APP_NAME} Alert",
-                                  screen.width - ALERT_W - 16,
-                                  screen.height - ALERT_H - 56)
+                                  mx + mw - ALERT_W - 16,
+                                  my + mh - ALERT_H - 56)
             if self._alert_timer:
                 self._alert_timer.cancel()
             self._alert_timer = threading.Timer(8.0, self._hide_alert)
@@ -2900,9 +2958,9 @@ class App:
         HotkeyManager thread — never raises (a broken OSD must not take the
         hotkeys down with it)."""
         try:
-            if exclusive_fullscreen_active():
-                return  # showing the OSD would minimize the game (see helper)
-            import webview
+            rect = popup_monitor_rect()
+            if rect is None:
+                return  # exclusive fullscreen owns the only monitor
             if self._osd_win is None:
                 self._make_osd_window()
             if not self._osd_primed:
@@ -2929,10 +2987,10 @@ class App:
                 if h:
                     self._osd_h = int(h)   # cache only a real measurement
                 self._osd_win.resize(OSD_W, self._osd_h or OSD_H)
-            screen = webview.screens[0]
+            mx, my, mw, mh = rect
             self._show_noactivate(self._osd_win, f"{APP_NAME} OSD",
-                                  (screen.width - OSD_W) // 2,
-                                  screen.height - (self._osd_h or OSD_H) - 90)
+                                  mx + (mw - OSD_W) // 2,
+                                  my + mh - (self._osd_h or OSD_H) - 90)
             if self._osd_timer:
                 self._osd_timer.cancel()
             self._osd_timer = threading.Timer(1.2, self._hide_osd)
@@ -3033,42 +3091,30 @@ class App:
                 h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
                 h = int(h)
                 self._mixer_win.resize(MIXER_W, h)
-                x, y = self._mixer_position(h)
-                self._mixer_win.move(x, y)
+                pos = self._mixer_position(h)
+                if pos:
+                    self._mixer_win.move(*pos)
             except Exception as e:
                 log.warning("mixer resize-on-count-change failed: %s", e)
         else:
             self._mixer_vis_n = vis_n
 
     def _mixer_position(self, h):
-        """Bottom-center of the monitor the cursor is on, 80 px up from the
-        work-area bottom (gkey-style placement)."""
-        u = ctypes.windll.user32
-        pt = ctypes.wintypes.POINT()
-        u.GetCursorPos(ctypes.byref(pt))
-        MONITOR_DEFAULTTONEAREST = 2
-        # HMONITOR is pointer-sized; ctypes' default c_int restype would
-        # truncate it on x64 and silently break cursor-monitor placement
-        u.MonitorFromPoint.restype = ctypes.wintypes.HMONITOR
-        u.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
-        mon = u.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
-        mi = MONITORINFO()
-        mi.cbSize = ctypes.sizeof(MONITORINFO)
-        if mon and u.GetMonitorInfoW(mon, ctypes.byref(mi)):
-            mx, my = mi.rcWork.left, mi.rcWork.top
-            mw = mi.rcWork.right - mi.rcWork.left
-            mh = mi.rcWork.bottom - mi.rcWork.top
-        else:
-            import webview
-            s = webview.screens[0]
-            mx, my, mw, mh = 0, 0, s.width, s.height
+        """Bottom-center of a safe monitor (cursor's monitor normally; a
+        monitor the game does NOT own during exclusive fullscreen), 80 px up
+        from the work-area bottom (gkey-style placement). None = no safe
+        monitor exists — the caller suppresses the popup."""
+        rect = popup_monitor_rect()
+        if rect is None:
+            return None
+        mx, my, mw, mh = rect
         return mx + (mw - MIXER_W) // 2, my + mh - h - 80
 
     def _show_mixer(self):
-        if exclusive_fullscreen_active():
-            # drawing over an exclusive-fullscreen game minimizes it — the
-            # nudge hotkeys still work, only the popup is suppressed
-            log.info("mixer suppressed: exclusive-fullscreen app in foreground")
+        if popup_monitor_rect() is None:
+            # exclusive-fullscreen game owns the ONLY monitor — drawing over
+            # it would minimize it; nudge hotkeys still work, popup suppressed
+            log.info("mixer suppressed: exclusive fullscreen owns the only monitor")
             return
         _co_initialize()
         if self._mixer_win is None:
@@ -3086,7 +3132,10 @@ class App:
         # height to content, then place bottom-center of the CURSOR's monitor
         h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
         self._mixer_win.resize(MIXER_W, int(h))
-        x, y = self._mixer_position(int(h))
+        pos = self._mixer_position(int(h))
+        if pos is None:      # exclusive fullscreen claimed the last safe monitor mid-open
+            return
+        x, y = pos
         self._show_noactivate(self._mixer_win, f"{APP_NAME} Mixer", x, y)
         self._mixer_shown = True        # now _refresh_mixer may resize on count change
         self._arm_mixer_timer()                      # each key press re-arms it
