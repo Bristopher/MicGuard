@@ -21,6 +21,8 @@ about doesn't exist.
 | [Features/Device-Priority-Profiles-Hotkeys](Features/Device-Priority-Profiles-Hotkeys.md) | Shipped v1.5 feature doc: capture+render priority lists, profiles, fallback alerts, volume hotkeys + OSD; v1.6 adds the mixer popup, boost-past-100%, and the active-window hotkey target — API surface, config, testing, troubleshooting |
 | [superpowers/specs/2026-07-14 mixer-popup-active-window-boost](superpowers/specs/2026-07-14-mixer-popup-active-window-boost-design.md) | Approved v1.6 design: Shift+F2 gkey-style mixer popup, active-window volume target, Discord boost-by-ducking, OSD height fix |
 | [superpowers/plans/2026-07-14 mixer-popup-active-window-boost](superpowers/plans/2026-07-14-mixer-popup-active-window-boost.md) | v1.6 implementation plan — 6 TDD tasks (boost math pytest-covered, ephemeral-key protocol, mixer window) |
+| [superpowers/specs/2026-07-15 mixer-nav-rolodex-meters](superpowers/specs/2026-07-15-mixer-nav-rolodex-meters-design.md) | Approved v1.7 design: mixer arrow-nav mode toggle, rolodex through all audio sessions w/ dots, live level pulse on bars (toggle, default on), M mute key |
+| [Future/Auto-Profile-Switch-On-App-Launch](Future/Auto-Profile-Switch-On-App-Launch.md) | Parked: auto-activate a profile when a mapped app launches (trigger candidates table, config/UI sketch) |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes
