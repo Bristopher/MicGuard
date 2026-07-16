@@ -405,5 +405,58 @@ class TestMicEqCore(unittest.TestCase):
         self.assertIn("Preamp: -3 dB\n", out)
 
 
+class TestMicEqWriter(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix="micguard-eq-test-")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _read(self, name):
+        import os
+        p = os.path.join(self.dir, name)
+        return open(p, encoding="utf-8").read() if os.path.exists(p) else None
+
+    def test_writes_file_and_include(self):
+        import os
+        open(os.path.join(self.dir, "config.txt"), "w", encoding="utf-8").write("Preamp: 0 dB\n")
+        err = m.write_eq_config(self.dir, "AT2020",
+                                {"enabled": True, "gain_db": 6.0, "bass_db": 4.0})
+        self.assertEqual(err, "")
+        self.assertIn("Device: AT2020 Capture", self._read(m.EQ_FILE))
+        cfg = self._read("config.txt")
+        self.assertEqual(cfg.count(m.EQ_INCLUDE_LINE), 1)
+        # second write: include not duplicated
+        m.write_eq_config(self.dir, "AT2020",
+                          {"enabled": True, "gain_db": 8.0, "bass_db": 4.0})
+        self.assertEqual(self._read("config.txt").count(m.EQ_INCLUDE_LINE), 1)
+
+    def test_unchanged_content_not_rewritten(self):
+        import os
+        open(os.path.join(self.dir, "config.txt"), "w", encoding="utf-8").write("")
+        eq = {"enabled": True, "gain_db": 6.0, "bass_db": 0.0}
+        m.write_eq_config(self.dir, "AT2020", eq)
+        p = os.path.join(self.dir, m.EQ_FILE)
+        before = os.path.getmtime(p)
+        os.utime(p, (before - 100, before - 100))
+        m.write_eq_config(self.dir, "AT2020", eq)   # identical content
+        self.assertEqual(os.path.getmtime(p), before - 100)   # untouched
+
+    def test_missing_config_txt_created(self):
+        err = m.write_eq_config(self.dir, "AT2020",
+                                {"enabled": True, "gain_db": 1.0, "bass_db": 0.0})
+        self.assertEqual(err, "")
+        self.assertIn(m.EQ_INCLUDE_LINE, self._read("config.txt"))
+
+    def test_unwritable_dir_returns_error_string(self):
+        import os
+        bad = os.path.join(self.dir, "nope", "deeper")   # doesn't exist
+        err = m.write_eq_config(bad, "AT2020",
+                                {"enabled": True, "gain_db": 1.0, "bass_db": 0.0})
+        self.assertTrue(err.startswith("Mic EQ:"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1012,6 +1012,83 @@ def ensure_include_line(config_text: str) -> str | None:
     return config_text + EQ_INCLUDE_LINE + "\n"
 
 
+def apo_config_dir() -> str | None:
+    """Equalizer APO's config directory, or None when not installed.
+    Registry first (the installer writes ConfigPath), Program Files as a
+    fallback. Read-only; never requires admin."""
+    import winreg
+    for flags in (winreg.KEY_READ | winreg.KEY_WOW64_64KEY, winreg.KEY_READ):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\EqualizerAPO", 0, flags) as k:
+                path = winreg.QueryValueEx(k, "ConfigPath")[0]
+                if path and os.path.isdir(path):
+                    return path
+        except OSError:
+            pass
+    fallback = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                            "EqualizerAPO", "config")
+    return fallback if os.path.isdir(fallback) else None
+
+
+def write_eq_config(config_dir: str, device_name: str | None, eq: dict) -> str:
+    """Write MicGuard's include file + ensure the include line. Returns ""
+    or a short user-facing error. Only writes when content changed (APO
+    hot-reloads every write). Never raises (Rule 5)."""
+    try:
+        target = os.path.join(config_dir, EQ_FILE)
+        text = render_eq_config(device_name, eq)
+        old = None
+        try:
+            with open(target, encoding="utf-8") as f:
+                old = f.read()
+        except OSError:
+            pass
+        if old != text:
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(text)
+        main = os.path.join(config_dir, "config.txt")
+        try:
+            with open(main, encoding="utf-8") as f:
+                current = f.read()
+        except OSError:
+            current = ""
+        updated = ensure_include_line(current)
+        if updated is not None:
+            with open(main, "w", encoding="utf-8") as f:
+                f.write(updated)
+        return ""
+    except OSError as e:
+        log.warning("mic EQ write failed: %s", e)
+        return f"Mic EQ: can't write Equalizer APO config ({e.__class__.__name__})"
+
+
+def mic_is_apo_processed(device_id: str) -> bool | None:
+    """Is Equalizer APO registered on this capture endpoint? Reads the
+    endpoint's FxProperties registry values (HKLM, read-only) and looks for
+    the EqualizerAPO marker. None = can't tell — callers treat that as True
+    so a registry quirk never produces a false 'not processed' warning."""
+    import winreg
+    try:
+        guid = device_id.rsplit(".", 1)[-1]          # trailing {guid}
+        if not (guid.startswith("{") and guid.endswith("}")):
+            return None
+        key = (r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices"
+               r"\Audio\Capture\%s\FxProperties" % guid)
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+            i = 0
+            while True:
+                try:
+                    _, val, _ = winreg.EnumValue(k, i)
+                except OSError:
+                    return False
+                if isinstance(val, str) and "EqualizerAPO" in val:
+                    return True
+                i += 1
+    except OSError:
+        return None
+
+
 def migrate_config(raw: dict) -> dict:
     """v1 (single device_id/device_name/volume) -> v2 (profiles). PERMANENT —
     the one sanctioned exception to plain dict-merge migration, so any old
