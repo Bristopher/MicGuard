@@ -960,6 +960,58 @@ def save_config(cfg: dict) -> None:
         json.dump(cfg, f, indent=2)
 
 
+# --------------------------------------------------------------------------
+# Mic EQ (Equalizer APO) helpers — the optional extension's pure core.
+# MicGuard is not in the audio path; real gain/bass DSP comes from the
+# user-installed Equalizer APO. These functions only render text.
+# --------------------------------------------------------------------------
+
+EQ_FILE = "MicGuard-Mic.txt"
+EQ_INCLUDE_LINE = "Include: MicGuard-Mic.txt"
+EQ_GAIN_MIN, EQ_GAIN_MAX = -10.0, 20.0
+EQ_BASS_MIN, EQ_BASS_MAX = 0.0, 12.0
+
+
+def mic_eq_of(profile: dict) -> dict:
+    """Per-profile mic_eq with defaults injected and values clamped —
+    the read-side contract; no migration code needed (spec §3)."""
+    raw = profile.get("mic_eq") or {}
+    def _f(v, lo, hi):
+        try:
+            return max(lo, min(hi, float(v)))
+        except (TypeError, ValueError):
+            return 0.0
+    return {"enabled": bool(raw.get("enabled")),
+            "gain_db": _f(raw.get("gain_db"), EQ_GAIN_MIN, EQ_GAIN_MAX),
+            "bass_db": _f(raw.get("bass_db"), EQ_BASS_MIN, EQ_BASS_MAX)}
+
+
+def render_eq_config(device_name: str | None, eq: dict) -> str:
+    """Text of MicGuard-Mic.txt. Disabled (or no device) = every directive
+    commented out — the include line in config.txt stays put either way.
+    Device names are flattened to one line: config.json is user-editable
+    and must not be able to inject arbitrary APO directives."""
+    dev = " ".join(str(device_name).split()) if device_name else None
+    active = bool(eq.get("enabled")) and bool(dev)
+    p = "" if active else "# "
+    lines = ["# Written by MicGuard — do not edit; overwritten on save.",
+             f"{p}Device: {dev or 'none'} Capture",
+             f"{p}Preamp: {eq['gain_db']:.1f} dB"]
+    if eq.get("bass_db"):
+        lines.append(f"{p}Filter 1: ON LSC Fc 100 Hz Gain {eq['bass_db']:.1f} dB")
+    return "\n".join(lines) + "\n"
+
+
+def ensure_include_line(config_text: str) -> str | None:
+    """config.txt text with the MicGuard include appended, or None when it
+    is already there (idempotent — the line is added once, never removed)."""
+    if EQ_INCLUDE_LINE in config_text:
+        return None
+    if config_text and not config_text.endswith("\n"):
+        config_text += "\n"
+    return config_text + EQ_INCLUDE_LINE + "\n"
+
+
 def migrate_config(raw: dict) -> dict:
     """v1 (single device_id/device_name/volume) -> v2 (profiles). PERMANENT —
     the one sanctioned exception to plain dict-merge migration, so any old

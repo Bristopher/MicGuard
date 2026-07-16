@@ -357,5 +357,53 @@ class TestNoCallableShadowing(unittest.TestCase):
         self.assertNotIn("self._mixer_visible =", src)
 
 
+class TestMicEqCore(unittest.TestCase):
+    def test_defaults_injected_and_clamped(self):
+        self.assertEqual(m.mic_eq_of({}), {"enabled": False, "gain_db": 0.0, "bass_db": 0.0})
+        eq = m.mic_eq_of({"mic_eq": {"enabled": True, "gain_db": 99, "bass_db": -5}})
+        self.assertEqual(eq, {"enabled": True, "gain_db": 20.0, "bass_db": 0.0})
+        eq = m.mic_eq_of({"mic_eq": {"gain_db": -99, "bass_db": 30}})
+        self.assertEqual((eq["gain_db"], eq["bass_db"]), (-10.0, 12.0))
+
+    def test_render_enabled(self):
+        txt = m.render_eq_config("Microphone (2- AT2020USB+)",
+                                 {"enabled": True, "gain_db": 6.0, "bass_db": 4.0})
+        self.assertIn("Device: Microphone (2- AT2020USB+) Capture", txt)
+        self.assertIn("Preamp: 6.0 dB", txt)
+        self.assertIn("Filter 1: ON LSC Fc 100 Hz Gain 4.0 dB", txt)
+        self.assertTrue(txt.startswith("# Written by MicGuard"))
+
+    def test_render_disabled_comments_out_directives(self):
+        txt = m.render_eq_config("Mic",
+                                 {"enabled": False, "gain_db": 6.0, "bass_db": 4.0})
+        for line in txt.splitlines():
+            self.assertTrue(line.startswith("#") or not line.strip(), line)
+
+    def test_render_no_device_comments_out(self):
+        txt = m.render_eq_config(None, {"enabled": True, "gain_db": 6, "bass_db": 0})
+        for line in txt.splitlines():
+            self.assertTrue(line.startswith("#") or not line.strip(), line)
+
+    def test_render_strips_newlines_from_device_name(self):
+        txt = m.render_eq_config("Evil\nPreamp: 40 dB",
+                                 {"enabled": True, "gain_db": 0, "bass_db": 0})
+        self.assertNotIn("\nPreamp: 40 dB", txt.replace("Preamp: 0.0 dB", ""))
+        self.assertIn("Device: Evil Preamp: 40 dB Capture", txt)
+
+    def test_zero_bass_omits_filter_line(self):
+        txt = m.render_eq_config("Mic", {"enabled": True, "gain_db": 6, "bass_db": 0})
+        self.assertNotIn("Filter 1", txt)
+
+    def test_include_line_appended_once(self):
+        out = m.ensure_include_line("Preamp: -3 dB\n")
+        self.assertTrue(out.endswith(m.EQ_INCLUDE_LINE + "\n"))
+        self.assertIsNone(m.ensure_include_line(out))          # idempotent
+        self.assertIsNone(m.ensure_include_line("x\n" + m.EQ_INCLUDE_LINE))
+
+    def test_include_line_no_trailing_newline_source(self):
+        out = m.ensure_include_line("Preamp: -3 dB")
+        self.assertIn("Preamp: -3 dB\n", out)
+
+
 if __name__ == "__main__":
     unittest.main()
