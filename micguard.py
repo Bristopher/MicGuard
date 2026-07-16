@@ -571,6 +571,23 @@ def build_mixer_rows(bindings, sessions, foreground_exe,
     return rows
 
 
+def mixer_key_action(nav: str, key: str) -> tuple[str, int] | None:
+    """PURE map of a mixer key press to an action, per navigation mode.
+    digits (default): 1-9 select a visible row, up/down nudge the volume.
+    arrows: up/down move the selection (scrolling), left/right nudge;
+    digits still jump (approved 2026-07-15). esc/m behave the same in both."""
+    if key == "esc":
+        return ("close", 0)
+    if key == "m":
+        return ("mute", 0)
+    if key.isdigit() and key != "0":
+        return ("select", int(key) - 1)
+    if nav == "arrows":
+        return {"up": ("move", -1), "down": ("move", 1),
+                "left": ("nudge", -2), "right": ("nudge", 2)}.get(key)
+    return {"up": ("nudge", 2), "down": ("nudge", -2)}.get(key)
+
+
 # Thread messages App posts to the hotkey loop to register/unregister the
 # mixer's ephemeral keys ON the manager thread (RegisterHotKey is per-thread).
 WM_APP_MIXER_ON, WM_APP_MIXER_OFF = 0x8001, 0x8002

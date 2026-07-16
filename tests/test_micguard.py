@@ -242,5 +242,32 @@ class TestMixerSettings(unittest.TestCase):
         self.assertIs(cfg["mixer_meters"], True)
 
 
+class TestMixerKeyAction(unittest.TestCase):
+    def test_common_keys_both_modes(self):
+        for nav in ("digits", "arrows"):
+            self.assertEqual(m.mixer_key_action(nav, "esc"), ("close", 0))
+            self.assertEqual(m.mixer_key_action(nav, "m"), ("mute", 0))
+            self.assertEqual(m.mixer_key_action(nav, "1"), ("select", 0))
+            self.assertEqual(m.mixer_key_action(nav, "9"), ("select", 8))
+
+    def test_digits_mode(self):
+        self.assertEqual(m.mixer_key_action("digits", "up"), ("nudge", 2))
+        self.assertEqual(m.mixer_key_action("digits", "down"), ("nudge", -2))
+        self.assertIsNone(m.mixer_key_action("digits", "left"))
+        self.assertIsNone(m.mixer_key_action("digits", "right"))
+
+    def test_arrows_mode(self):
+        self.assertEqual(m.mixer_key_action("arrows", "up"), ("move", -1))
+        self.assertEqual(m.mixer_key_action("arrows", "down"), ("move", 1))
+        self.assertEqual(m.mixer_key_action("arrows", "left"), ("nudge", -2))
+        self.assertEqual(m.mixer_key_action("arrows", "right"), ("nudge", 2))
+
+    def test_unknown_nav_falls_back_to_digits(self):
+        self.assertEqual(m.mixer_key_action("bogus", "up"), ("nudge", 2))
+
+    def test_unknown_key_inert(self):
+        self.assertIsNone(m.mixer_key_action("digits", "f5"))
+
+
 if __name__ == "__main__":
     unittest.main()
