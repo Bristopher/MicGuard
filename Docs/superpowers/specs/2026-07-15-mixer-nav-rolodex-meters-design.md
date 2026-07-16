@@ -86,9 +86,13 @@ the end of `_show_mixer` (if `cfg["mixer_meters"]`), stopped in
 - polls peak values at 20 Hz and pushes `setLevels({rowKey: peak, ...})` to
   the page — the JS paints a brighter fill inside each bar, width =
   `peak × 100%` of the track (independent overlay; the volume fill stays);
-- re-resolves sessions whenever `_refresh_mixer` rebuilds the row model
-  (refresh stashes the row list; the pump reads the stash each tick — no
-  per-tick enumeration);
+- resolves sessions/endpoint meters **once, at pump start** (popup-open
+  time), not on every `_refresh_mixer` row-model rebuild — the pump reads a
+  stashed row list each tick and looks up each row's meter by `exe`, so no
+  per-tick enumeration, but **known limitation**: an app that starts playing
+  audio while the popup is already open shows up in the rolodex on the next
+  refresh but its bar will not pulse until the popup is closed and reopened
+  (as-shipped in v1.7; documented in the feature doc, backlog §11 item 4);
 - on stop: nulls every COM local, `gc.collect()`, THEN CoUninitialize
   (AI-guide mistake #11); stop event is `_stop_evt` (#12); every exception
   logs and kills only the pump, never the tray (#Rule 5).

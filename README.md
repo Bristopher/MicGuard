@@ -51,7 +51,9 @@ back **the instant** anything touches them — measured restore time ~50 ms.
   Discord without alt-tabbing), with a game-safe OSD that never steals focus.
 - 🎚️ **Mixer popup with boost-past-100%** — a dedicated hotkey (default
   `Shift+F3` on fresh installs) pops a small gkey-style mixer over your game;
-  digits/arrows pick a row and nudge it, and boosting an app past 100% ducks
+  digits or arrows pick a row (arrow-key mode is a setting) and nudge it, it
+  scrolls through every app currently playing audio, bars pulse with live
+  levels, `M` mutes the selected row, and boosting an app past 100% ducks
   the game (or everything else) to make room, all without alt-tabbing.
 - ⚡ **Event-driven, ~0% CPU** — no polling loops. It subscribes to Windows
   Core Audio change events and sleeps otherwise.
