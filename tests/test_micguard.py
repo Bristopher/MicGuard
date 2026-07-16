@@ -344,5 +344,18 @@ class TestMixerSelectOk(unittest.TestCase):
         self.assertTrue(m.mixer_select_ok(2, 0, 10))
 
 
+class TestNoCallableShadowing(unittest.TestCase):
+    """Pins the bug class from d546b21: an instance attribute (_mixer_visible
+    = False) shadowed the pre-existing _mixer_visible() method, breaking
+    toggle_mixer and _volume_feedback with 'bool object is not callable'."""
+
+    def test_mixer_visible_stays_a_method(self):
+        import inspect
+        self.assertTrue(callable(m.App._mixer_visible))
+        # the attribute that shadowed it in d546b21 must not come back:
+        src = inspect.getsource(m.App)
+        self.assertNotIn("self._mixer_visible =", src)
+
+
 if __name__ == "__main__":
     unittest.main()
