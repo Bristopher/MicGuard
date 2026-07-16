@@ -55,6 +55,9 @@ back **the instant** anything touches them — measured restore time ~50 ms.
   scrolls through every app currently playing audio, bars pulse with live
   levels, `M` mutes the selected row, and boosting an app past 100% ducks
   the game (or everything else) to make room, all without alt-tabbing.
+- 🎙️ **Mic EQ (optional extension)** — one guided setup unlocks real gain
+  boost (past your driver's max) and bass boost on your mic, saved per
+  profile, applied instantly. Powered by Equalizer APO.
 - ⚡ **Event-driven, ~0% CPU** — no polling loops. It subscribes to Windows
   Core Audio change events and sleeps otherwise.
 - 🖱️ **Left-click the tray icon** → Settings. Right-click → full menu

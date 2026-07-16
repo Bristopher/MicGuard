@@ -27,6 +27,7 @@ about doesn't exist.
 | [superpowers/specs/2026-07-16 mic-eq-extension](superpowers/specs/2026-07-16-mic-eq-extension-design.md) | Approved v1.8 design: optional in-app Mic EQ extension (real gain boost + bass boost via Equalizer APO), per-profile, automated guided setup |
 | [superpowers/plans/2026-07-16 mic-eq-extension](superpowers/plans/2026-07-16-mic-eq-extension.md) | v1.8 implementation plan — 6 TDD tasks (pure renderer/writer cores, settings card, guided setup, enforcement wiring, docs+test build) |
 | [Future/Same-Monitor-Overlay-Exclusive-Fullscreen](Future/Same-Monitor-Overlay-Exclusive-Fullscreen.md) | Parked: same-monitor popups over exclusive fullscreen — options table (injection ❌ anti-cheat, z-band ❌ privileged, FSO/borderless ✅, Game Bar widget = future route) |
+| [Features/Mic-EQ-Extension](Features/Mic-EQ-Extension.md) | Shipped v1.8 feature doc: optional Mic EQ extension (gain + bass boost via Equalizer APO) — pure renderer/writer core, always-visible settings card, guided consent-based setup flow, enforced-mic-following wiring, API/config/testing/troubleshooting |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes

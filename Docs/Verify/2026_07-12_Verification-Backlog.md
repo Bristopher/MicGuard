@@ -2,8 +2,8 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-16 — §11 added (v1.7) + item 6: exclusive-fullscreen popups now fall back to the game-free monitor instead of hiding (R6 Siege report)
-**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `f26a9c5..3aa9696` (2026-07-15, v1.7 implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§11 below. **Next sweep starts from this docs commit.**
+**Updated:** 2026-07-16 — §12 added (v1.8 Mic EQ extension)
+**Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
 
@@ -374,6 +374,62 @@ testing below.
    Judgment: is other-monitor placement discoverable enough, or do you want
    the popup to also flash/animate to catch your eye over there?
 
+## 12. v1.8 — Mic EQ extension: gain + bass boost via Equalizer APO (~20 min, only fully testable after a real setup run)
+
+**Shipped:** `42c09df`..`fac43cc` (implementation: `2b115c9` glue/detection/
+writer, `035f0bd` settings card, `8cbe14b` guided setup flow, `27b21a8`
+enforced-mic wiring, `fac43cc` fallback-targeting fix) + this docs commit,
+ship date 2026-07-16 — NOT yet released; `VERSION` pre-stamped `1.8.0` and
+that exact build is INSTALLED at `%LOCALAPPDATA%\Programs\MicGuard` for this
+hands-on pass (`.\release.ps1` Enter-accept will offer exactly 1.8.0 on
+Bristopher's go). Full design:
+[superpowers/specs/2026-07-16-mic-eq-extension-design.md](../superpowers/specs/2026-07-16-mic-eq-extension-design.md).
+Feature doc: [Features/Mic-EQ-Extension.md](../Features/Mic-EQ-Extension.md).
+
+**Machine-verified (Task 6 sweep, 2026-07-16):** `uv run pytest -q` — 65/65
+green, including the new `TestMicEqCore`, `TestMicEqWriter`,
+`TestMicEqPersistence`, `TestEqDeviceName`, and `TestEqFallbackFollowsNewMic`
+classes (the last covering the `fac43cc` fix — EQ now targets the mic the
+fallback callback just switched TO, not the stale enforced dict read before
+the switch); a temp-directory harness for `write_eq_config` confirmed
+change-only writes, idempotent include-line insertion, and clamped/
+newline-stripped rendering; a `HEAD` request against the SourceForge
+Equalizer APO installer URL returned `200`; the not-installed state of the
+Mic EQ card was eyeballed in the running settings window (explainer copy +
+"Set up Mic EQ" button + "powered by" link, no sliders, since Equalizer APO
+is not installed on this dev machine). None of this exercises the real
+install/UAC/Configurator/reboot flow or real audible gain/bass — only a live
+run can.
+
+1. **Run "Set up Mic EQ" for real — the only end-to-end test of the guided
+   flow.** Click it in Settings: judge the consent dialog's wording (does it
+   clearly say what's downloaded, from where, and the 3 steps ahead?), the
+   UAC prompt (installer-driven, not MicGuard's), and — critically — the
+   Equalizer APO Configurator that opens at the end of the installer: tick
+   YOUR microphone on the Capture tab. Confirm the reboot-offer dialog
+   appears afterward and reads clearly.
+2. **Post-reboot: sliders appear, gain/bass are audibly real.** Reopen
+   Settings — the card should now show the enable switch + Gain/Bass
+   sliders (not the not-installed explainer). Set +6 dB gain, join a real
+   Discord call — confirm the other party reports you're audibly louder.
+   Set bass boost and check it via "Hear yourself" — confirm a genuinely
+   deeper/fuller low end, not just louder.
+3. **EQ follows a profile switch AND a mic unplug/fallback.** Switch active
+   profiles from the tray — open `%<Equalizer APO ConfigPath>%\MicGuard-Mic.txt`
+   and confirm the `Device:` line matches the newly active profile's
+   enforced mic. Then unplug the top-priority mic mid-session and confirm
+   the same file's `Device:` line flips to the fallback mic (this is what
+   `fac43cc` specifically fixed — verify it actually holds under a real
+   unplug, not just the synthetic harness).
+4. **Disable the switch → stock mic instantly.** Flip the enable switch off
+   and Save — confirm `MicGuard-Mic.txt`'s directives are commented out and
+   your mic sounds like stock Windows again immediately (no restart, no
+   reboot).
+5. **Judgment: does the card's explainer copy sell it right?** Read the
+   not-installed state's copy fresh, as if you'd never seen the design spec
+   — is "real gain boost past your driver's max + bass boost, one guided
+   setup" clear and compelling, or does it need tightening?
+
 ---
 
 ## Sweep log (commit ranges reviewed for unverified work)
@@ -383,7 +439,8 @@ testing below.
 - 2026-07-14: `cc1b023` (v1.6 Task 1 start) → `3eb0be9` (Task 6 docs: mixer popup, boost, active target, settings targets, default `shift+f2` binding, all 5 v1.6 implementation tasks). Everything shipped is §9.
 - 2026-07-14 (later): `3c11052` (boost-bookkeeping fix round, covered by §9.7) → `03d6e59` (v1.6.0 pre-stamp + §9.8, no user-facing behavior beyond the version string) + this docs commit. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
 - 2026-07-15: `03d6e59` → `2a80bda` (v1.6.1: check-now update link, mixer repaint on hotkey nudges, exclusive-fullscreen popup suppression, default mixer bind `shift+f3`, versioned build archive). Everything shipped is §10.
-- 2026-07-16: `f26a9c5` (v1.7 Task 1 start) → `3aa9696` (v1.7 implementation, all 5 tasks: mixer settings, `mixer_key_action`, rolodex/viewport, nav modes + M mute, level pulse) + this docs commit (Task 6: feature doc, README, backlog §11, the `AudioUtilities.GetSpeakers().GetId()` → `.id` bugfix, v1.7.0 pre-stamp). Everything shipped is §11. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
+- 2026-07-16: `f26a9c5` (v1.7 Task 1 start) → `3aa9696` (v1.7 implementation, all 5 tasks: mixer settings, `mixer_key_action`, rolodex/viewport, nav modes + M mute, level pulse) + this docs commit (Task 6: feature doc, README, backlog §11, the `AudioUtilities.GetSpeakers().GetId()` → `.id` bugfix, v1.7.0 pre-stamp). Everything shipped is §11.
+- 2026-07-16 (later): `42c09df` (v1.8 Mic EQ Task 1 start) → `fac43cc` (v1.8 implementation, all 5 tasks: pure renderer/writer core, settings card, guided setup flow, enforced-mic wiring, fallback-targeting fix) + this docs commit (Task 6: feature doc, README, Dynamic-Settings, System-Conventions "Optional extension card" registration, backlog §12, v1.8.0 pre-stamp). Everything shipped is §12. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
 
 ## Changelog (verified items move here)
 

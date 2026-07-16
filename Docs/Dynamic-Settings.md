@@ -79,6 +79,20 @@ Each profile is a self-contained pair of ordered priority lists (see
 [Features/Device-Priority-Profiles-Hotkeys.md](Features/Device-Priority-Profiles-Hotkeys.md)).
 `hotkeys.bindings[].target` is `"system"` or `"app:<exe-name>"`.
 
+As of v1.8, each profile dict also carries a `mic_eq` key (v1.8, Mic EQ
+extension — see [Features/Mic-EQ-Extension.md](Features/Mic-EQ-Extension.md)):
+
+```jsonc
+"mic_eq": {"enabled": false, "gain_db": 0, "bass_db": 0}
+```
+
+**This key lives on the PROFILE, not the top level** — it is a per-profile
+setting like `mics`/`outputs`, not a root flag like `enforce`. Defaults are
+injected and values clamped on every read via `mic_eq_of(profile)`
+(`gain_db` −10…+20, `bass_db` 0…+12); there is no migration code because
+the read-side default-injection IS the migration for old profiles that
+predate this key.
+
 ## Settings Reference
 
 | Key | Default | Meaning | Read By |
