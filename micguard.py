@@ -2008,7 +2008,7 @@ class App:
         self._mixer_sel = 0
         self._mixer_off = 0             # rolodex viewport offset (v1.7)
         self._mixer_rows = []           # last build_mixer_rows() output (Task 5 reads it)
-        self._mixer_visible = False     # True between _show_mixer and _hide_mixer
+        self._mixer_shown = False       # True between _show_mixer and _hide_mixer
         self._mixer_vis_n = None        # visible-row count as of the last resize (I2)
         self.hotkeys = None             # HotkeyManager while hotkeys are enabled
         self._monitor = None            # MicMonitor while "hear yourself" is on
@@ -3027,7 +3027,7 @@ class App:
         # scrolling (offset changes, same visible count) must stay a no-op
         # to preserve the no-jitter guarantee.
         vis_n = len(visible_rows)
-        if self._mixer_visible and vis_n != self._mixer_vis_n:
+        if self._mixer_shown and vis_n != self._mixer_vis_n:
             self._mixer_vis_n = vis_n
             try:
                 h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
@@ -3081,14 +3081,14 @@ class App:
         self._mixer_sel = 0
         self._mixer_off = 0
         self._mixer_vis_n = None        # force a fresh measurement below (I2)
-        self._mixer_visible = False     # _refresh_mixer must not self-resize here
+        self._mixer_shown = False       # _refresh_mixer must not self-resize here
         self._refresh_mixer()                        # builds model + setMixer
         # height to content, then place bottom-center of the CURSOR's monitor
         h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
         self._mixer_win.resize(MIXER_W, int(h))
         x, y = self._mixer_position(int(h))
         self._show_noactivate(self._mixer_win, f"{APP_NAME} Mixer", x, y)
-        self._mixer_visible = True      # now _refresh_mixer may resize on count change
+        self._mixer_shown = True        # now _refresh_mixer may resize on count change
         self._arm_mixer_timer()                      # each key press re-arms it
         if self.hotkeys:
             self.hotkeys.set_mixer_keys(True)
@@ -3155,7 +3155,7 @@ class App:
         self._mixmeter_stop = None
 
     def _hide_mixer(self):
-        self._mixer_visible = False
+        self._mixer_shown = False
         self._stop_mixer_meters()
         # release the ephemeral keys FIRST — the popup must never hide while
         # digits/arrows are still swallowed globally
