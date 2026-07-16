@@ -24,6 +24,8 @@ about doesn't exist.
 | [superpowers/specs/2026-07-15 mixer-nav-rolodex-meters](superpowers/specs/2026-07-15-mixer-nav-rolodex-meters-design.md) | Approved v1.7 design: mixer arrow-nav mode toggle, rolodex through all audio sessions w/ dots, live level pulse on bars (toggle, default on), M mute key |
 | [Future/Auto-Profile-Switch-On-App-Launch](Future/Auto-Profile-Switch-On-App-Launch.md) | Parked: auto-activate a profile when a mapped app launches (trigger candidates table, config/UI sketch) |
 | [superpowers/plans/2026-07-15 mixer-nav-rolodex-meters](superpowers/plans/2026-07-15-mixer-nav-rolodex-meters.md) | v1.7 implementation plan — 6 TDD tasks (nav-mode/viewport pure cores, mute helpers, meter pump, docs+test build) |
+| [superpowers/specs/2026-07-16 mic-eq-extension](superpowers/specs/2026-07-16-mic-eq-extension-design.md) | Approved v1.8 design: optional in-app Mic EQ extension (real gain boost + bass boost via Equalizer APO), per-profile, automated guided setup |
+| [Future/Same-Monitor-Overlay-Exclusive-Fullscreen](Future/Same-Monitor-Overlay-Exclusive-Fullscreen.md) | Parked: same-monitor popups over exclusive fullscreen — options table (injection ❌ anti-cheat, z-band ❌ privileged, FSO/borderless ✅, Game Bar widget = future route) |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes
