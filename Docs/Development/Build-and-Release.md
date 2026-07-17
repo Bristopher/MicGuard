@@ -1,7 +1,7 @@
 # Build & Release — how to build MicGuard and ship an update
 
 **Status:** ✅ Current
-**Last Updated:** 2026-07-12
+**Last Updated:** 2026-07-17
 
 The quick-reference version of this lives at the repo root
 ([RELEASING.md](../../RELEASING.md), next to the script). This doc is the full
@@ -55,7 +55,10 @@ The script (root of the repo):
 4. Commits `Release vX.Y.Z`, creates an **annotated** tag, pushes commit + tag
    (annotated matters: `--follow-tags` ignores lightweight tags — learned the
    hard way on v1.1.0).
-5. Publishes the GitHub release with the exe attached.
+5. Publishes the GitHub release with the exe attached (asset name is always
+   exactly `MicGuard.exe` — the updater downloads it by name).
+6. Archives a versioned copy at `Releases\vX.Y.Z\MicGuard-X.Y.Z.exe`
+   (git-ignored) so every shipped build stays retrievable locally.
 
 Installed copies see the new tag on next launch and **ask** the user to
 update (never silent); a failed in-place update opens the releases page.
@@ -82,8 +85,16 @@ git reset --hard HEAD~1                # if the release commit was made
 
 ## Updating a dev machine's installed copy without a release
 
+One command — `install-test.ps1` (repo root) is the TEST-BUILD path:
+
 ```powershell
-Stop-Process -Name MicGuard -Force
-Copy-Item dist\MicGuard.exe "$env:LOCALAPPDATA\Programs\MicGuard\" -Force
-Start-Process "$env:LOCALAPPDATA\Programs\MicGuard\MicGuard.exe"
+.\install-test.ps1            # build from the working tree → stop the running
+                              #   app → install over %LOCALAPPDATA%\Programs\MicGuard
+                              #   → relaunch → log tail + sabotage smoke
+.\install-test.ps1 -SkipBuild # reinstall the existing dist\MicGuard.exe
 ```
+
+No version bump, no tag, no GitHub — releasing stays `release.ps1`'s job.
+This is the loop for "pre-stamp the version, build, test locally, THEN
+release": stamp `VERSION` + `pyproject.toml`, run `install-test.ps1`, verify,
+and `release.ps1` will offer to release exactly the pre-stamped version.

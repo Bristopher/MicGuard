@@ -5,6 +5,10 @@ the latest released `vX.Y.Z` git tag, suggests the next version, and stamps
 your choice into both `micguard.py` (`VERSION = "x.y.z"` — what running apps
 compare against) and `pyproject.toml`. You never edit a version number by hand.
 
+Testing a build locally WITHOUT releasing is a different script:
+`.\install-test.ps1` (build → install over `%LOCALAPPDATA%\Programs\MicGuard`
+→ relaunch → smoke). No version, no tag, no GitHub.
+
 ## The one command
 
 ```powershell

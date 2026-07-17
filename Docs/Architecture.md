@@ -1,7 +1,7 @@
 # MicGuard — Architecture
 
-**Status:** ✅ Current — describes the shipped v1.x app
-**Last Updated:** 2026-07-14
+**Status:** ✅ Current — describes the shipped v1.8.0 app
+**Last Updated:** 2026-07-17
 
 ## Overview
 
@@ -9,8 +9,8 @@ MicGuard is a single-process Windows tray app that pins default audio
 devices and their volumes. Windows and games (Black Ops 3 was the original
 offender) silently change both; MicGuard subscribes to Core Audio change
 events and re-asserts the configured state within ~50 ms (measured). It is
-deliberately tiny: **one source file (`micguard.py`, ~2,340 lines as of
-v1.5), stdlib + 4 runtime deps, compiled to a single unsigned exe** that
+deliberately tiny: **one source file (`micguard.py`, ~3,600 lines as of
+v1.8), stdlib + 5 runtime deps, compiled to a single unsigned exe** that
 friends run with zero setup. There is no server, no database, no installer,
 no Task Scheduler — a JSON config, a log file, and one `HKCU\...\Run`
 registry value.
@@ -21,6 +21,14 @@ the app enforces TWO flows — capture (mics) and render (outputs) — each an
 ordered priority/fallback list with per-device volume, grouped into named
 profiles, plus optional global volume hotkeys with a game-safe on-screen
 display. Full feature detail: [Features/Device-Priority-Profiles-Hotkeys.md](Features/Device-Priority-Profiles-Hotkeys.md).
+
+Since then: **v1.6** added the gkey-style mixer popup with boost-past-100%
+ducking and the active-window hotkey target; **v1.7** added mixer nav modes,
+the all-sessions rolodex, live level pulse, and M mute (same feature doc);
+**v1.8** added the optional [Mic EQ extension](Features/Mic-EQ-Extension.md)
+(Equalizer APO), same-monitor fullscreen popup placement with per-exe
+auto-learn (spec: [superpowers/specs/2026-07-16-same-monitor-autolearn-design.md](superpowers/specs/2026-07-16-same-monitor-autolearn-design.md)),
+WASD mixer nav, and the stale-device-ID self-heal described below.
 
 ## Stack
 
@@ -47,15 +55,16 @@ network call. Stdlib-first is the rule here (see AI-Development-Guide Rule 1).
 ```
 .
 ├── micguard.py          # THE app — all source lives here on purpose
+├── tests/test_micguard.py  # pytest suite for the pure logic (uv run pytest -q)
 ├── pyproject.toml       # uv project; version is MIRRORED here by release.ps1
 ├── release.ps1          # one-command release: bump → build → tag → gh release
+├── install-test.ps1     # TEST-BUILD path: build → install over %LOCALAPPDATA% → smoke
 ├── RELEASING.md         # how to ship a version (root, next to the script)
 ├── README.md            # user-facing install/what-it-does
+├── assets/              # icon + the README settings screenshot
 ├── Docs/                # this docs tree (index: Auto-set-default-Microphone-vol-Main-Doc-Index.md)
 ├── dist/MicGuard.exe    # build output (gitignored; uploaded to GitHub Releases)
-├── .myArchive/          # DEAD CODE — the pre-rewrite nircmd/polling scripts
-│                        #   (BlackOps3_*.py, Auto-set-default-*.py, nircmd.exe).
-│                        #   Gitignored, kept for reference only. Never import from it.
+├── Releases/vX.Y.Z/     # versioned archive of every shipped exe (gitignored; written by release.ps1)
 └── .venv/               # uv-managed (gitignored)
 ```
 
@@ -68,7 +77,7 @@ Runtime footprint on a user's machine:
 | `%LOCALAPPDATA%\Programs\MicGuard\MicGuard.exe` | suggested install location (any path works) |
 | `HKCU\...\Run\MicGuard` | startup entry, only when the setting is on |
 
-## Threads table (v1.5)
+## Threads table (v1.8)
 
 | Thread | Started by | Lifetime | Owns COM? | Purpose |
 |---|---|---|---|---|
@@ -81,6 +90,9 @@ Runtime footprint on a user's machine:
 | `MicMonitor` ("hear yourself") | `App._set_monitor` | while the switch is on | CoInitialize; releases before CoUninitialize | WASAPI passthrough selected mic → speakers; sets `Enforcer.hold_volume` |
 | Alert / OSD hide timers | `notify_fallback` / `show_osd` | transient `threading.Timer` | none (UI only) | auto-hide the fallback popup (8 s) / hotkey OSD (1.2 s) |
 | Mixer idle timer | `App._arm_mixer_timer` (v1.6) | armed while the mixer popup is visible; re-armed on every ephemeral key press | none (UI only) | `threading.Timer(6.0, self._hide_mixer)` auto-closes the popup and releases the ephemeral keys after 6 s of no digit/arrow/Esc activity |
+| Mixer meter pump | `App._start_mixer_meters` (v1.7) | while the mixer popup is visible AND `mixer_meters` is on | defensive CoInitialize; nulls COM locals before CoUninitialize | 20 Hz session/endpoint `IAudioMeterInformation` peaks → live level pulse on the bars |
+| FSE probe | `App._arm_fse_probe` (v1.8) | ~1.5 s after a popup shows over an exclusive-fullscreen game | none (Win32 only) | watches `IsIconic`/foreground order-of-events; if the popup minimized the game it hides, restores the game, learns the exe into `fse_incompatible`, and relocates future popups |
+| Mic EQ startup timer | `App.run` (v1.8) | one-shot `threading.Timer(3.0)` | none (file I/O only) | re-asserts the Equalizer APO include file after the first enforce pass settles (change-only write) |
 
 `micguard.py` sections top-to-bottom: Core Audio plumbing → `HotkeyManager` →
 event callbacks → config/registry/update/uninstall helpers (incl.
@@ -116,6 +128,10 @@ Enforcer (threading.Thread, daemon)      [owns all LONG-LIVED COM objects]
  │  one per flow, re-attached whenever the enforced device of that flow changes
  └─ loop: wake.get(timeout=15)   # 15 s watchdog is the only "polling"
      └─ _enforce():  for each flow (capture, render):
+         0. heal_stale_ids(entries, devices) — USB re-enumeration can hand a
+            saved device a NEW endpoint ID; when exactly one connected device
+            matches a stale entry's exact name and its ID is unclaimed, the
+            entry re-adopts the new ID (config saved, logged) — v1.8
          1. pick_device(entries, active_ids) — highest-priority CONNECTED
             device in that flow's priority list, else None
          2. device changed since last pass (availability-driven)?
@@ -228,6 +244,24 @@ the rename back). Version comparison is `parse_version` on
 **Uninstall flow:** tray → *Uninstall…* → confirm dialog → delete Run key +
 `%APPDATA%\MicGuard` → trampoline bat deletes the exe after exit.
 
+**Popups vs exclusive-fullscreen games (v1.7 → v1.8):** every no-activate
+popup (mixer, OSD, fallback alert) places itself via
+`popup_monitor_rect(cfg)` / `pick_popup_monitor(...)`. Default mode `auto`
+tries the game's own monitor first (Win11 Fullscreen Optimizations tolerate
+overlays even in "exclusive" mode); a ~1.5 s FSE probe then watches whether
+the game got minimized by the popup — if so it restores the game, learns the
+exe into `cfg["fse_incompatible"]`, and that game's popups relocate to a
+game-free monitor from then on. Modes `other`/`off` skip the attempt.
+Injection/z-band overlays were researched and rejected (anti-cheat ban risk)
+— see [Future/Same-Monitor-Overlay-Exclusive-Fullscreen.md](Future/Same-Monitor-Overlay-Exclusive-Fullscreen.md).
+
+**Mic EQ extension (v1.8, optional):** an always-visible 3-state settings
+card integrates Equalizer APO — per-profile mic gain (past the driver's max)
+and bass boost, written to a `MicGuard-Mic.txt` include file whose `Device:`
+line follows the enforced mic (including fallbacks). Setup is guided and
+consent-first; nothing is installed silently. Full detail:
+[Features/Mic-EQ-Extension.md](Features/Mic-EQ-Extension.md).
+
 ## Gotchas (each one cost real debugging time)
 
 - **Every thread that touches COM calls `comtypes.CoInitialize()` first.**
@@ -325,14 +359,17 @@ the rename back). Version comparison is `parse_version` on
 - **No ruff config yet** — the standing Astral-toolchain preference applies,
   but `[tool.ruff]` hasn't been added to `pyproject.toml`.
 - **Test coverage is pure-function only.** `tests/test_micguard.py`
-  (pytest, `uv run pytest -q`) covers `migrate_config`, `active_profile_lists`,
-  `pick_device`, and `parse_hotkey` — everything COM-free and hardware-free.
-  Core Audio behavior (enforcement, fallback, hotkey firing, the OSD/alert
-  windows) still has no automated coverage; it's verified live via the
-  manual smoke commands in [AI-Development-Guide.md](AI-Development-Guide.md)
-  §6 plus the human backlog in
+  (pytest, `uv run pytest -q`, 88 tests as of v1.8) covers the COM-free and
+  hardware-free logic: `migrate_config`, `active_profile_lists`,
+  `pick_device`, `heal_stale_ids`, `parse_hotkey`, the mixer nav/viewport/
+  boost math (`mixer_key_action` incl. WASD), the EQ renderer/writer cores,
+  and `pick_popup_monitor`. Core Audio behavior (enforcement, fallback,
+  hotkey firing, the OSD/alert windows) still has no automated coverage;
+  it's verified live via the manual smoke commands in
+  [AI-Development-Guide.md](AI-Development-Guide.md) §6 plus the human
+  backlog in
   [Verify/2026_07-12_Verification-Backlog.md](Verify/2026_07-12_Verification-Backlog.md).
   A fake-`AudioUtilities` seam is the natural next step if COM-level tests are
   ever added.
-- `.myArchive/` and `.history/` are untracked local-only history; the GitHub
-  repo starts at the v1.0.0 rewrite (`4bda0ee`).
+- The GitHub repo starts at the v1.0.0 rewrite (`4bda0ee`); anything older is
+  untracked local-only history.

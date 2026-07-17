@@ -4,11 +4,11 @@
 working on this codebase.
 
 **Status:** 📌 MUST READ before generating any code
-**Last Updated:** 2026-07-13
+**Last Updated:** 2026-07-17
 
-This is a single-file Windows tray app (`micguard.py`, ~2,340 lines as of
-v1.5 — grew well past the original "~600 lines" from device priority
-lists/profiles/hotkeys). The rules are few but they are all real — each one
+This is a single-file Windows tray app (`micguard.py`, ~3,600 lines as of
+v1.8 — grew well past the original "~600 lines" from device priority
+lists/profiles/hotkeys/mixer/Mic-EQ). The rules are few but they are all real — each one
 traces to a bug or a deliberate product decision. Read
 [Architecture.md](Architecture.md) for how the pieces fit.
 
@@ -131,11 +131,12 @@ raise                      # an unhandled exception in the Enforcer kills enforc
 
 `tests/test_micguard.py` now EXISTS — unittest-style classes run by pytest,
 covering every pure/hardware-free function (`migrate_config`,
-`active_profile_lists`, `pick_device`, `parse_hotkey`). Run it FIRST, before
-anything else:
+`active_profile_lists`, `pick_device`, `heal_stale_ids`, `parse_hotkey`, the
+mixer nav/boost math, the EQ renderer/writer cores, `pick_popup_monitor`).
+Run it FIRST, before anything else:
 
 ```powershell
-uv run pytest -q                                 # 15 tests, must be green — run this FIRST
+uv run pytest -q                                 # 88 tests, must be green — run this FIRST
 ```
 
 There is still **no automated coverage for Core Audio behavior** (enforcement,

@@ -37,7 +37,9 @@ back **the instant** anything touches them — measured restore time ~50 ms.
 - 🔁 **Priority fallback lists** — rank multiple mics/outputs; if your top
   pick disconnects, MicGuard falls back to the next one in line and switches
   straight back the instant your top pick reconnects. No more "Windows picked
-  some random mic and forgot to switch back."
+  some random mic and forgot to switch back." Survives USB re-plugs that
+  quietly change Windows' internal device IDs — devices are re-adopted by
+  name automatically.
 - 🗂️ **Named profiles** — bundle a mic list + output list under a name (e.g.
   "Gaming", "Streaming") and switch between them from the tray menu.
 - 🔊 **Holds your mic volume** — BO3, Discord, Windows Update, anything moves
@@ -51,10 +53,14 @@ back **the instant** anything touches them — measured restore time ~50 ms.
   Discord without alt-tabbing), with a game-safe OSD that never steals focus.
 - 🎚️ **Mixer popup with boost-past-100%** — a dedicated hotkey (default
   `Shift+F3` on fresh installs) pops a small gkey-style mixer over your game;
-  digits or arrows pick a row (arrow-key mode is a setting) and nudge it, it
+  digits, arrows, or WASD (nav mode is a setting) pick a row and nudge it, it
   scrolls through every app currently playing audio, bars pulse with live
   levels, `M` mutes the selected row, and boosting an app past 100% ducks
   the game (or everything else) to make room, all without alt-tabbing.
+- 🖥️ **Fullscreen-game friendly** — popups appear on your game's own monitor
+  when Windows allows it; if a specific game insists on minimizing instead,
+  MicGuard notices once, restores your game instantly, remembers that game,
+  and moves its popups to a game-free monitor from then on.
 - 🎙️ **Mic EQ (optional extension)** — one guided setup unlocks real gain
   boost (past your driver's max) and bass boost on your mic, saved per
   profile, applied instantly. Powered by Equalizer APO.
