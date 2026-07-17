@@ -621,3 +621,33 @@ class TestHealStaleIds(unittest.TestCase):
         self.assertTrue(m.heal_stale_ids(entries, devices))
         self.assertEqual(entries[0]["id"], "new-id")   # first priority wins
         self.assertEqual(entries[1]["id"], "stale2")   # second stays stale
+
+
+class TestMixerKeyActionWasd(unittest.TestCase):
+    def test_wasd_mode_full_map(self):
+        self.assertEqual(m.mixer_key_action("wasd", "w"), ("move", -1))
+        self.assertEqual(m.mixer_key_action("wasd", "s"), ("move", 1))
+        self.assertEqual(m.mixer_key_action("wasd", "a"), ("nudge", -2))
+        self.assertEqual(m.mixer_key_action("wasd", "d"), ("nudge", 2))
+
+    def test_wasd_mode_arrows_also_work(self):
+        self.assertEqual(m.mixer_key_action("wasd", "up"), ("move", -1))
+        self.assertEqual(m.mixer_key_action("wasd", "left"), ("nudge", -2))
+
+    def test_wasd_mode_common_keys(self):
+        self.assertEqual(m.mixer_key_action("wasd", "esc"), ("close", 0))
+        self.assertEqual(m.mixer_key_action("wasd", "m"), ("mute", 0))
+        self.assertEqual(m.mixer_key_action("wasd", "5"), ("select", 4))
+
+    def test_wasd_keys_inert_in_other_modes(self):
+        for nav in ("digits", "arrows"):
+            for key in ("w", "a", "s", "d"):
+                self.assertIsNone(m.mixer_key_action(nav, key), (nav, key))
+
+    def test_wasd_key_constants(self):
+        # W/A/S/D vks, ids 115-118 — registered only in wasd mode
+        self.assertEqual(m.MIXER_WASD_KEYS,
+                         [(115, 0, 0x57), (116, 0, 0x41),
+                          (117, 0, 0x53), (118, 0, 0x44)])
+        self.assertTrue(all(hid > max(h for h, _, _ in m.MIXER_KEYS)
+                            for hid, _, _ in m.MIXER_WASD_KEYS))

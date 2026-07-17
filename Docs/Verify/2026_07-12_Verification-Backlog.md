@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-16 — §13 added: same-monitor popup auto-learn (Siege) + stale-device-id self-heal (the 2nd-priority screenshot bug); §12 item 6 minor triage
+**Updated:** 2026-07-16 — §13 added: same-monitor popup auto-learn (Siege), stale-device-id self-heal, WASD mixer nav mode; §12 item 6 minor triage
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -474,6 +474,14 @@ caused); desktop smoke (popup on cursor monitor, no probe).
    within a couple of enforce passes the log shows the re-adoption line and
    enforcement stays on the AT2020, no manual fixes. Judgment: is silent
    self-heal right, or do you want a toast when ids are re-adopted?
+6. **WASD mixer mode (your "like a gamer" request).** Settings → Mixer
+   navigation → "W/S pick · A/D volume (gamer)", Save. Open the mixer:
+   W/S move the selection, A/D nudge, arrows also work, digits still jump,
+   footer reads the WASD hints. CRITICAL check: switch BACK to digits or
+   arrows mode, open the mixer over a game, and confirm W/A/S/D still move
+   your character while the popup is up (they're only globally grabbed in
+   wasd mode). In wasd mode itself, W/A/S/D are eaten while the popup is
+   open (max 6 s) — that's the deal; judge if it feels right.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

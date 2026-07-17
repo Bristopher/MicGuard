@@ -103,7 +103,7 @@ predate this key.
 | `hotkeys.bindings` | `[...5 defaults...]` | List of key + target pairs for volume nudges | Hotkey manager (live) |
 | `run_at_startup` | `true` | HKCU Run key entry (no admin, no Task Scheduler) | App (on save) |
 | `check_updates` | `true` | Check GitHub releases on launch | App (on launch) |
-| `mixer_nav` | `"digits"` | How Shift+F3 popup's keys work: `"digits"` (1-9 pick, ↑↓ volume) or `"arrows"` (↑↓ pick, ←→ volume) | Mixer (live) |
+| `mixer_nav` | `"digits"` | How Shift+F3 popup’s keys work: `"digits"` (1-9 pick, ↑↓ volume), `"arrows"` (↑↓ pick, ←→ volume), or `"wasd"` (W/S pick, A/D volume — arrows work too; W/A/S/D only globally grabbed in this mode, popup-open only) | Mixer (live) |
 | `mixer_meters` | `true` | Live level pulse on mixer bars (polls while popup open) | Mixer (live) |
 
 ## Adding a new setting — exact steps

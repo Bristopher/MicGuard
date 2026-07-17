@@ -787,14 +787,23 @@ def mixer_select_ok(val: int, offset: int, n_rows: int) -> bool:
 def mixer_key_action(nav: str, key: str) -> tuple[str, int] | None:
     """PURE map of a mixer key press to an action, per navigation mode.
     digits (default): 1-9 select a visible row, up/down nudge the volume.
-    arrows: up/down move the selection (scrolling), left/right nudge;
-    digits still jump (approved 2026-07-15). esc/m behave the same in both."""
+    arrows: up/down move the selection (scrolling), left/right nudge.
+    wasd (2026-07-16, "like a gamer"): W/S move, A/D nudge — arrows work
+    too (superset of arrows mode). Digits still jump in every mode
+    (approved 2026-07-15); esc/m behave the same everywhere. WASD keys are
+    inert outside wasd mode AND not even registered there (see
+    MIXER_WASD_KEYS) — a popup must never eat a gamer's movement keys."""
     if key == "esc":
         return ("close", 0)
     if key == "m":
         return ("mute", 0)
     if key.isdigit() and key != "0":
         return ("select", int(key) - 1)
+    if nav == "wasd":
+        return {"w": ("move", -1), "s": ("move", 1),
+                "a": ("nudge", -2), "d": ("nudge", 2),
+                "up": ("move", -1), "down": ("move", 1),
+                "left": ("nudge", -2), "right": ("nudge", 2)}.get(key)
     if nav == "arrows":
         return {"up": ("move", -1), "down": ("move", 1),
                 "left": ("nudge", -2), "right": ("nudge", 2)}.get(key)
@@ -811,6 +820,12 @@ WM_APP_MIXER_ON, WM_APP_MIXER_OFF = 0x8001, 0x8002
 MIXER_KEYS = ([(100 + i, 0, 0x31 + i) for i in range(9)]           # 1..9
               + [(109, 0, 0x26), (110, 0, 0x28), (111, 0, 0x1B),   # up, down, esc
                  (112, 0, 0x25), (113, 0, 0x27), (114, 0, 0x4D)])  # left, right, M
+
+# W/A/S/D — registered IN ADDITION to MIXER_KEYS, and ONLY while
+# cfg["mixer_nav"] == "wasd": grabbing a gamer's movement keys in any other
+# mode (even for the popup's 6 s lifetime) would be unforgivable.
+MIXER_WASD_KEYS = [(115, 0, 0x57), (116, 0, 0x41),   # W, A
+                   (117, 0, 0x53), (118, 0, 0x44)]   # S, D
 
 
 class HotkeyManager(threading.Thread):
@@ -889,7 +904,12 @@ class HotkeyManager(threading.Thread):
         if getattr(self, "_mixer_ids", None):
             return  # already held — a double-ON must not orphan registrations
         self._mixer_ids = []
-        for hid, mods, vk in MIXER_KEYS:
+        keys = list(MIXER_KEYS)
+        if self.app.cfg.get("mixer_nav") == "wasd":
+            # mode read at popup-open time; a mid-open settings change takes
+            # effect on the next open (same rule as the rest of the key set)
+            keys += MIXER_WASD_KEYS
+        for hid, mods, vk in keys:
             if u.RegisterHotKey(None, hid, mods, vk):
                 self._mixer_ids.append(hid)
             else:
@@ -911,7 +931,8 @@ class HotkeyManager(threading.Thread):
                 self._tid, WM_APP_MIXER_ON if on else WM_APP_MIXER_OFF, 0, 0)
 
     _MIXER_KEYNAMES = {109: "up", 110: "down", 111: "esc",
-                       112: "left", 113: "right", 114: "m"}
+                       112: "left", 113: "right", 114: "m",
+                       115: "w", 116: "a", 117: "s", 118: "d"}
 
     def _mixer_hotkey(self, hid):
         key = (str(hid - 99) if 100 <= hid <= 108
@@ -1502,6 +1523,7 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
     onchange="S && (S.mixerNav = this.value)">
     <option value="digits">1&ndash;9 pick &middot; &#8593;&#8595; volume</option>
     <option value="arrows">&#8593;&#8595; pick &middot; &#8592;&#8594; volume</option>
+    <option value="wasd">W/S pick &middot; A/D volume (gamer)</option>
   </select></div>
 </div>
 <div class="switchrow">
@@ -2873,7 +2895,8 @@ class App:
                 app.cfg["check_updates"] = bool(state.get("checkUpdates"))
                 app.cfg["notify_fallback"] = bool(state.get("notifyFallback"))
                 nav = state.get("mixerNav")
-                app.cfg["mixer_nav"] = nav if nav in ("digits", "arrows") else "digits"
+                app.cfg["mixer_nav"] = (nav if nav in ("digits", "arrows", "wasd")
+                                        else "digits")
                 app.cfg["mixer_meters"] = bool(state.get("mixerMeters", True))
                 fsp = state.get("fullscreenPopups")
                 app.cfg["fullscreen_popups"] = (fsp if fsp in ("auto", "other", "off")
@@ -3553,9 +3576,9 @@ class App:
                                            getattr(self, "_mixer_off", 0))
         self._mixer_off = off
         nav = self.cfg.get("mixer_nav", "digits")
-        footer = ("Esc closes · ↑↓ pick · ←→ volume · M mute · 1–9 jump"
-                  if nav == "arrows" else
-                  "Esc closes · 1–9 pick · ↑↓ volume · M mute")
+        footer = {"arrows": "Esc closes · ↑↓ pick · ←→ volume · M mute · 1–9 jump",
+                  "wasd": "Esc closes · W/S pick · A/D volume · M mute · 1–9 jump",
+                  }.get(nav, "Esc closes · 1–9 pick · ↑↓ volume · M mute")
         visible_rows = rows[off:off + MIXER_VISIBLE]
         model = {"rows": visible_rows,
                  "selected": self._mixer_sel - off,
