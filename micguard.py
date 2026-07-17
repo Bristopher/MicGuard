@@ -1957,13 +1957,17 @@ function hkTargetLabel(o){
   if (o === 'system') return 'System volume';
   if (o === 'active') return 'Active window';
   if (o === 'mixer') return 'Mixer popup (toggle)';
+  if (o === 'profile:next') return 'Next profile (cycle)';
+  if (o.startsWith('profile:')) return 'Profile: ' + o.slice(8);
   return o.replace(/^app:/, '');
 }
 function hkRowHtml(b, i){
-  const opts = ['system', 'active', 'mixer', ...S.sessions.map(x => 'app:' + x)];
+  const opts = ['system', 'active', 'mixer', 'profile:next',
+    ...S.profiles.map(p => 'profile:' + p),
+    ...S.sessions.map(x => 'app:' + x)];
   if (b.target && !opts.includes(b.target)) opts.push(b.target);
   const bad = S.hotkeyFailures && S.hotkeyFailures.includes(b.keys);
-  const isMixer = b.target === 'mixer';
+  const noStep = b.target === 'mixer' || (b.target || '').startsWith('profile:');
   return `<div class="hkrow">
     <input class="hkkeys${bad ? ' hkbad' : ''}" value="${esc(b.keys)}"
       placeholder="press keys&hellip;"${bad ? ' title="In use by another app &mdash; pick a different combo"' : ''}
@@ -1973,8 +1977,8 @@ function hkRowHtml(b, i){
       opts.map(o => `<option value="${esc(o)}"${o === b.target ? ' selected' : ''}>${
         esc(hkTargetLabel(o))}</option>`).join('')
     }</select></div>
-    <input class="hkstep" value="${isMixer ? '—' : b.step}" maxlength="3" title="Step, &plusmn;1&ndash;10"
-      ${isMixer ? 'disabled' : ''}
+    <input class="hkstep" value="${noStep ? '—' : b.step}" maxlength="3" title="Step, &plusmn;1&ndash;10"
+      ${noStep ? 'disabled' : ''}
       oninput="this.value=this.value.replace(/[^0-9-]/g,'')" onchange="hkStep(${i},this)">
     <a class="del" onclick="removeHk(${i})">&#x2715;</a></div>`;
 }
