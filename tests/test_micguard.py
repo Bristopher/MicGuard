@@ -564,3 +564,52 @@ class TestPickPopupMonitor(unittest.TestCase):
     def test_no_monitors(self):
         self.assertEqual(m.pick_popup_monitor(True, "auto", False, 0, 0, []),
                          (None, False))
+
+    def test_auto_blacklisted_single_monitor_suppresses(self):
+        self.assertEqual(m.pick_popup_monitor(True, "auto", True, 1, 1,
+                                              [(1, (0, 0, 2560, 1392))]),
+                         (None, False))
+
+    def test_off_mode_only_applies_when_exclusive(self):
+        # branch-ordering invariant: non-exclusive ignores the mode entirely
+        self.assertEqual(m.pick_popup_monitor(False, "off", False, 2, 0, self.MONS),
+                         ((2560, 0, 1920, 1032), False))
+
+
+class TestHealStaleIds(unittest.TestCase):
+    DEVICES = [("new-id", "AT2020 Headphones"), ("other-id", "ASUS VE278")]
+
+    def test_adopts_new_id_on_exact_name_match(self):
+        entries = [{"id": "stale-id", "name": "AT2020 Headphones", "volume": 42}]
+        self.assertTrue(m.heal_stale_ids(entries, self.DEVICES))
+        self.assertEqual(entries[0]["id"], "new-id")
+
+    def test_live_ids_untouched(self):
+        entries = [{"id": "other-id", "name": "ASUS VE278", "volume": 100}]
+        self.assertFalse(m.heal_stale_ids(entries, self.DEVICES))
+        self.assertEqual(entries[0]["id"], "other-id")
+
+    def test_no_name_match_no_adoption(self):
+        entries = [{"id": "stale-id", "name": "Gone Forever Mic", "volume": 85}]
+        self.assertFalse(m.heal_stale_ids(entries, self.DEVICES))
+        self.assertEqual(entries[0]["id"], "stale-id")
+
+    def test_duplicate_names_stay_untouched(self):
+        devices = [("a", "USB Headset"), ("b", "USB Headset")]
+        entries = [{"id": "stale", "name": "USB Headset", "volume": 50}]
+        self.assertFalse(m.heal_stale_ids(entries, devices))
+        self.assertEqual(entries[0]["id"], "stale")
+
+    def test_claimed_id_not_stolen(self):
+        # another entry already owns the only name-matching device's id
+        entries = [{"id": "new-id", "name": "AT2020 Headphones", "volume": 42},
+                   {"id": "stale", "name": "AT2020 Headphones", "volume": 60}]
+        self.assertFalse(m.heal_stale_ids(entries, self.DEVICES))
+        self.assertEqual(entries[1]["id"], "stale")
+
+    def test_multiple_entries_healed_in_one_pass(self):
+        devices = [("m1", "Mic A"), ("m2", "Mic B")]
+        entries = [{"id": "x", "name": "Mic A", "volume": 85},
+                   {"id": "y", "name": "Mic B", "volume": 60}]
+        self.assertTrue(m.heal_stale_ids(entries, devices))
+        self.assertEqual([e["id"] for e in entries], ["m1", "m2"])

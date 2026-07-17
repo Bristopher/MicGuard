@@ -141,6 +141,34 @@ def pick_device(entries, active_ids):
     return next((e for e in entries if e.get("id") in active_ids), None)
 
 
+def heal_stale_ids(entries, devices) -> bool:
+    """PURE self-heal after Windows re-enumerates an endpoint: a USB
+    replug/port change can give the SAME device a new id, orphaning the
+    saved entry — the entry then reads "(not connected)" and enforcement
+    silently falls back to the next priority (bit the AT2020 twice on
+    2026-07-16: mic during the v1.8 sweep, headphones in Bristopher's
+    screenshot). For each entry whose id is no longer present, adopt the id
+    of the connected device with the EXACT same name — only when exactly
+    one such device exists and its id isn't already claimed by another
+    entry (name collisions stay untouched rather than guessing). Mutates
+    `entries` in place; returns True when anything changed so the caller
+    can persist and log."""
+    ids = {d[0] for d in devices}
+    claimed = {e.get("id") for e in entries}
+    changed = False
+    for e in entries:
+        if e.get("id") in ids:
+            continue
+        matches = [d for d in devices
+                   if d[1] == e.get("name") and d[0] not in claimed]
+        if len(matches) == 1:
+            claimed.discard(e.get("id"))
+            e["id"] = matches[0][0]
+            claimed.add(matches[0][0])
+            changed = True
+    return changed
+
+
 def get_default_endpoint_id(flow: int, role) -> str | None:
     enumerator = AudioUtilities.GetDeviceEnumerator()
     try:
@@ -1484,7 +1512,7 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 </div>
 <div class="switchrow">
   <div><div class="lab">Popups over fullscreen games</div>
-       <div class="hint">Try same monitor: popups show on the game's screen; a game that truly can't take it blinks ONCE, then MicGuard remembers it and uses your other monitor</div></div>
+       <div class="hint">Try same monitor: popups show on the game's screen; a game that truly can't take it blinks ONCE, then MicGuard remembers it and uses your other monitor (to retry a learned game, delete it from fse_incompatible in config.json)</div></div>
   <div class="select-wrap"><select id="fspop"
     onchange="S && (S.fullscreenPopups = this.value)">
     <option value="auto">Try same monitor (auto-learn)</option>
@@ -2253,7 +2281,13 @@ class Enforcer(threading.Thread):
         if not entries:
             self.enforced[key] = None
             return
-        active_ids = {i for i, _ in list_devices(flow)}
+        devices = list_devices(flow)
+        if heal_stale_ids(entries, devices):
+            # Windows re-enumerated a saved device (same name, new id) —
+            # adopt + persist so priority order survives USB replugs
+            save_config(self.app.cfg)
+            log.info("%s: re-adopted device id(s) by name after re-enumeration", key)
+        active_ids = {i for i, _ in devices}
         want = pick_device(entries, active_ids)
         prev = self.enforced[key]
         if want is None:
@@ -3267,11 +3301,12 @@ class App:
             self._alert_win.evaluate_js(
                 f"setAlert({json.dumps(kind)}, {json.dumps(title)}, {json.dumps(sub)})")
             mx, my, mw, mh = rect
+            target = self._fse_probe_target() if try_same else None
             self._show_noactivate(self._alert_win, f"{APP_NAME} Alert",
                                   mx + mw - ALERT_W - 16,
                                   my + mh - ALERT_H - 56)
-            if try_same:
-                self._arm_fse_probe(self._hide_alert)
+            if target:
+                self._arm_fse_probe(*target, self._hide_alert)
             if self._alert_timer:
                 self._alert_timer.cancel()
             self._alert_timer = threading.Timer(8.0, self._hide_alert)
@@ -3312,54 +3347,86 @@ class App:
         except Exception:
             pass
 
-    def _arm_fse_probe(self, hide, reshow=None):
+    @staticmethod
+    def _fse_probe_target():
+        """(game_hwnd, game_exe) — call BEFORE showing the popup (review
+        I2: capturing after the show can watch the wrong window when the
+        no-activate path degrades, and misses a fast minimize)."""
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        return hwnd, get_foreground_exe()
+
+    def _arm_fse_probe(self, game_hwnd, game_exe, hide, reshow=None):
         """Auto-learn for same-monitor popups over exclusive fullscreen
-        (spec 2026-07-16): we just showed a popup on the game's own monitor
-        because the exclusive flag only reports what the game REQUESTED. If
-        the game minimizes within 1.5 s the overlay really broke exclusive
-        mode — hide the popup, restore the game, remember the exe in
-        cfg["fse_incompatible"], and re-place via `reshow` (now that the exe
-        is learned, the pick relocates to the other monitor). Ban-proof by
-        construction: only OUR windows are shown/hidden and only public
-        window state (foreground hwnd, IsIconic) is read. One probe at a
-        time; the popup is no-activate so the game is still foreground at
-        arm time."""
-        if getattr(self, "_fse_probe_live", False):
+        (spec 2026-07-16): the popup was just shown on the game's own
+        monitor because the exclusive flag only reports what the game
+        REQUESTED. If the game minimizes within 1.5 s the overlay really
+        broke exclusive mode — hide the popup, restore the game, remember
+        the exe in cfg["fse_incompatible"], and (mixer only) reopen once
+        the game has re-acquired exclusive so the pick relocates to the
+        other monitor. Ban-proof by construction: only OUR windows are
+        shown/hidden and only public window state is read. game_hwnd/exe
+        come from _fse_probe_target() captured BEFORE the show."""
+        if not game_hwnd or not game_exe or getattr(self, "_fse_probe_live", False):
             return
         u = ctypes.windll.user32
-        game_hwnd = u.GetForegroundWindow()
-        game_exe = get_foreground_exe()
-        if not game_hwnd or not game_exe:
-            return
         self._fse_probe_live = True
 
         def probe():
             try:
                 for _ in range(15):
                     time.sleep(0.1)
-                    if u.IsIconic(game_hwnd):
+                    if not u.IsIconic(game_hwnd):
+                        continue
+                    # Review I1: the game also auto-minimizes when the USER
+                    # alt-tabs away (exclusive apps do that on focus loss).
+                    # If another real app is foreground now, this wasn't the
+                    # popup's doing — hide it and change nothing.
+                    fg_exe = get_foreground_exe()
+                    if fg_exe and fg_exe.lower() != game_exe.lower():
                         try:
                             hide()
                         except Exception:
                             pass
-                        u.ShowWindow(game_hwnd, 9)          # SW_RESTORE
-                        low = game_exe.lower()
-                        if low not in self.cfg.get("fse_incompatible", []):
-                            self.cfg.setdefault("fse_incompatible", []).append(low)
-                            save_config(self.cfg)
-                        log.info("%s minimizes under same-monitor popups — "
-                                 "learned; using the other monitor from now on",
-                                 game_exe)
-                        if reshow:
-                            time.sleep(0.3)                 # let the restore settle
-                            reshow()
+                        log.info("fse probe: %s minimized on focus switch to "
+                                 "%s — not learning", game_exe, fg_exe)
                         return
+                    try:
+                        hide()
+                    except Exception:
+                        pass
+                    u.ShowWindow(game_hwnd, 9)              # SW_RESTORE
+                    low = game_exe.lower()
+                    if low not in self.cfg.get("fse_incompatible", []):
+                        self.cfg.setdefault("fse_incompatible", []).append(low)
+                        save_config(self.cfg)
+                    log.info("%s minimizes under same-monitor popups — "
+                             "learned; using the other monitor from now on",
+                             game_exe)
+                    if reshow:
+                        # Review C1: exclusive takes 0.5–2 s to re-engage
+                        # after SW_RESTORE; reopening earlier would re-pick
+                        # "not exclusive" → the game monitor again → a second
+                        # minimize with no probe. Wait for exclusive to come
+                        # back (≤5 s); if it never does, stay hidden — the
+                        # next hotkey press routes via the learned blacklist.
+                        for _ in range(50):
+                            time.sleep(0.1)
+                            if exclusive_fullscreen_active():
+                                reshow()
+                                return
+                        log.info("fse probe: exclusive not re-established — "
+                                 "popup stays hidden until the next hotkey")
+                    return
             except Exception as e:
                 log.warning("fse probe failed: %s", e)
             finally:
                 self._fse_probe_live = False
 
-        threading.Thread(target=probe, daemon=True, name="fse-probe").start()
+        try:
+            threading.Thread(target=probe, daemon=True, name="fse-probe").start()
+        except Exception:
+            self._fse_probe_live = False
+            raise
 
     def show_osd(self, label, percent):
         """Volume OSD, bottom-center, no focus steal. Called from the
@@ -3396,11 +3463,12 @@ class App:
                     self._osd_h = int(h)   # cache only a real measurement
                 self._osd_win.resize(OSD_W, self._osd_h or OSD_H)
             mx, my, mw, mh = rect
+            target = self._fse_probe_target() if try_same else None
             self._show_noactivate(self._osd_win, f"{APP_NAME} OSD",
                                   mx + (mw - OSD_W) // 2,
                                   my + mh - (self._osd_h or OSD_H) - 90)
-            if try_same:
-                self._arm_fse_probe(self._hide_osd)
+            if target:
+                self._arm_fse_probe(*target, self._hide_osd)
             if self._osd_timer:
                 self._osd_timer.cancel()
             self._osd_timer = threading.Timer(1.2, self._hide_osd)
@@ -3546,12 +3614,13 @@ class App:
         if pos is None:      # placement became unsafe mid-open
             return
         x, y, try_same = pos
+        target = self._fse_probe_target() if try_same else None
         self._show_noactivate(self._mixer_win, f"{APP_NAME} Mixer", x, y)
         self._mixer_shown = True        # now _refresh_mixer may resize on count change
-        if try_same:
+        if target:
             # auto-learn: if the game minimizes, hide + restore + learn the
             # exe, then reopen — the pick then relocates to the other monitor
-            self._arm_fse_probe(self._hide_mixer, reshow=self._show_mixer)
+            self._arm_fse_probe(*target, self._hide_mixer, reshow=self._show_mixer)
         self._arm_mixer_timer()                      # each key press re-arms it
         if self.hotkeys:
             self.hotkeys.set_mixer_keys(True)
