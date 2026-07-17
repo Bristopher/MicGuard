@@ -70,7 +70,7 @@ registry).
 uv sync                                          # install deps (.venv, uv.lock)
 uv run pythonw micguard.py                       # run the tray app from source
 Get-Content $env:APPDATA\MicGuard\micguard.log -Tail 20   # the only debug surface
-uv run pyinstaller --onefile --noconsole --name MicGuard micguard.py  # build dist\MicGuard.exe
+.\install-test.ps1                               # TEST-BUILD path: build from working tree → install over %LOCALAPPDATA%\Programs\MicGuard → relaunch → log tail + sabotage smoke (no version/tag/release)
 .\release.ps1 [-Version x.y.z|-Bump patch|minor|major]  # THE release path: version picked at build time (interactive when no args)→build→tag→gh release (see RELEASING.md)
 Stop-Process -Name MicGuard,pythonw -Force       # kill running instances (onefile exe = 2 processes, normal)
 ```
