@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-16 — §13 added: same-monitor popup auto-learn (Siege), stale-device-id self-heal, WASD mixer nav mode; §12 item 6 minor triage
+**Updated:** 2026-07-17 — §14 added: event history (v1.9)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -482,6 +482,60 @@ caused); desktop smoke (popup on cursor monitor, no probe).
    your character while the popup is up (they're only globally grabbed in
    wasd mode). In wasd mode itself, W/A/S/D are eaten while the popup is
    open (max 6 s) — that's the deal; judge if it feels right.
+
+## 14. Event history (v1.9)
+
+**Shipped:** `555f236`..`1ebb3da` on `main`, ship date 2026-07-17 — NOT yet
+released; will ship inside whatever release `VERSION` gets pre-stamped for
+next. A human-readable log of notable events (device fallbacks/recoveries,
+coalesced default re-asserts, self-heals, profile switches, settings saves,
+Mic EQ setup, app lifecycle) now lives in a new Settings "History" card,
+backed by `%APPDATA%\MicGuard\history.json`. Volume-hold snap-backs and
+other per-enforcement-pass noise are deliberately NEVER recorded. Full
+design: [superpowers/specs/2026-07-17-event-history-design.md](../superpowers/specs/2026-07-17-event-history-design.md).
+Feature doc: [Features/Event-History.md](../Features/Event-History.md).
+
+**Machine-verified:** `uv run pytest -q` — 101/101 green, including the 13
+new pure/hardware-free tests (`TestHistoryPush` — 6: append, coalesce
+hit/miss on kind/text/window edge, only-newest-coalesces, cap trim keeping
+newest last; `TestHistoryRecorder` — 7: add/flush/reload round-trip,
+missing-file-starts-empty, corrupt-file-starts-empty, invalid-shape entries
+dropped on load, snapshot newest-first/capped/copies-not-refs, clear empties
+memory+file, add/flush never raise against an unwritable path). Data-level
+smoke: manually inspected `history.json` shape after a `history_push`
+round-trip and confirmed `App.history.snapshot(100)` matches the
+`get_state()["history"]` payload shape the Settings JS expects. None of this
+exercises real Core Audio fallback/reassert events firing through the live
+Enforcer, or the actual card rendering in a running window — only a live
+session can.
+
+1. **Real fallback + recovery.** Unplug the priority-1 mic (e.g. the AT2020)
+   while MicGuard is running, then replug it. Open Settings → History card —
+   confirm a `fallback` row appears on unplug and a `recover` row appears on
+   replug, with sane wording (device names, not raw IDs) and timestamps that
+   match when you actually pulled/replugged the cable, not some stale value.
+2. **One coalesced re-assert row, not spam.** Launch a game known to steal
+   the default device repeatedly (or simulate by hammering
+   `SetDefaultEndpoint` to something else in a loop for a minute) — the
+   History card should show exactly ONE `reassert` row with a growing `×N`
+   badge, not dozens of separate rows. Confirm the row's timestamp updates to
+   the LATEST occurrence, not the first.
+3. **Volume sabotage produces NO row.** Set the enforced device's volume to
+   some other value (mmsys.cpl slider, or the sabotage one-liner in
+   AI-Development-Guide §6) and let MicGuard snap it back — confirm the
+   History card does NOT gain a row. This is the whole point of the
+   exclusion; if a row appears here, that's a real bug, not a judgment call.
+4. **Clear button + restart persistence.** Settings → History → Clear —
+   confirm the card immediately shows the empty state ("Nothing yet…").
+   Restart MicGuard (quit + relaunch) — confirm it's STILL empty (i.e. Clear
+   actually rewrote `history.json`, not just the in-memory copy) until a new
+   `start` row appears from the relaunch itself.
+5. **Card wording/timestamps/scroll feel judgment.** Generate a handful of
+   different event kinds (start, a profile switch, a settings save) and
+   eyeball the card fresh: do the `Jul 17 06:48`-style timestamps read
+   naturally, does the fixed-height scroll area feel right with 10+ rows, and
+   does the newest-first ordering match your expectation of "most recent at
+   the top"?
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

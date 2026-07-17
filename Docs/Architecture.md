@@ -74,10 +74,11 @@ Runtime footprint on a user's machine:
 |---|---|
 | `%APPDATA%\MicGuard\config.json` | settings (see [Dynamic-Settings.md](Dynamic-Settings.md)) |
 | `%APPDATA%\MicGuard\micguard.log` | INFO-level log; the only debugging surface on a friend's PC |
+| `%APPDATA%\MicGuard\history.json` | notable-event history (v1.9) — capped at 500 entries, written by `HistoryRecorder`; not a settings file (see Dynamic-Settings.md) |
 | `%LOCALAPPDATA%\Programs\MicGuard\MicGuard.exe` | suggested install location (any path works) |
 | `HKCU\...\Run\MicGuard` | startup entry, only when the setting is on |
 
-## Threads table (v1.8)
+## Threads table (v1.9)
 
 | Thread | Started by | Lifetime | Owns COM? | Purpose |
 |---|---|---|---|---|
@@ -93,6 +94,7 @@ Runtime footprint on a user's machine:
 | Mixer meter pump | `App._start_mixer_meters` (v1.7) | while the mixer popup is visible AND `mixer_meters` is on | defensive CoInitialize; nulls COM locals before CoUninitialize | 20 Hz session/endpoint `IAudioMeterInformation` peaks → live level pulse on the bars |
 | FSE probe | `App._arm_fse_probe` (v1.8) | ~1.5 s after a popup shows over an exclusive-fullscreen game | none (Win32 only) | watches `IsIconic`/foreground order-of-events; if the popup minimized the game it hides, restores the game, learns the exe into `fse_incompatible`, and relocates future popups |
 | Mic EQ startup timer | `App.run` (v1.8) | one-shot `threading.Timer(3.0)` | none (file I/O only) | re-asserts the Equalizer APO include file after the first enforce pass settles (change-only write) |
+| History flush timer | `HistoryRecorder.add` (v1.9) | armed on the first `add()` since the last flush; auto-cancels itself when it fires | none (file I/O only) | `threading.Timer(HISTORY_FLUSH_S=5.0, self.flush)` debounces writes of `history.json` — a storm of `add()` calls in the same 5 s window still writes the file once; `App._quit` also flushes synchronously since the timer won't survive process exit |
 
 `micguard.py` sections top-to-bottom: Core Audio plumbing → `HotkeyManager` →
 event callbacks → config/registry/update/uninstall helpers (incl.

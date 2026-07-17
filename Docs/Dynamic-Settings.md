@@ -143,3 +143,12 @@ Then:
 That's the whole system. If a proposed setting doesn't fit root-flag /
 per-profile / per-device (secrets, anything needing yet more structure),
 raise it as a design question instead of bolting on a second mechanism.
+
+## Deliberately NOT a setting: event history (v1.9)
+
+`history.json` (`%APPDATA%\MicGuard\history.json`) is a **data file**, not a
+config surface — there is no `DEFAULT_CONFIG` key, no settings-window
+toggle, and no way to disable recording. Event History is always on. Don't
+add a `history_enabled` flag or similar; if a future request wants
+filtering/disabling, that's a new design question, not a gap in this
+mechanism. See [Features/Event-History.md](Features/Event-History.md).
