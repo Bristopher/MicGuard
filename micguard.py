@@ -1513,6 +1513,16 @@ select:disabled{opacity:.4;cursor:default}
 .del{color:#71717a;cursor:pointer;font-size:11px;flex:none;padding:2px 4px;border-radius:4px}
 .del:hover{color:#f87171;background:#27272a}
 .empty{color:#71717a;font-size:12px;padding:2px 2px 6px}
+.histhead{display:flex;align-items:center;justify-content:space-between}
+.histlist{max-height:180px;overflow-y:auto;border:1px solid #27272a;
+  border-radius:8px;padding:4px 0;background:#09090b}
+.histrow{display:flex;gap:8px;align-items:baseline;padding:3px 10px;
+  font-size:12px;color:#d4d4d8;line-height:1.45}
+.histrow:hover{background:#18181b}
+.histts{color:#71717a;white-space:nowrap;font-variant-numeric:tabular-nums}
+.histn{color:#a1a1aa;background:#27272a;border-radius:6px;padding:0 5px;
+  font-size:11px;white-space:nowrap}
+.histempty{color:#71717a;font-size:12px;padding:8px 10px}
 .vol-row{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
 .vol-row label{margin:0}
 .volwrap{display:flex;align-items:center;gap:2px}
@@ -1700,6 +1710,9 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
        <div class="hint">Popup when your device disconnects and MicGuard switches to a fallback</div></div>
   <label class="switch"><input type="checkbox" id="sw_fallback"><span class="knob"></span></label>
 </div>
+<div class="sec histhead"><label>History</label>
+  <a class="chknow" href="javascript:void(0)" onclick="clearHistory()">clear</a></div>
+<div id="histlist" class="histlist"></div>
 </div>
 <div class="btns">
   <a class="gh" href="javascript:void(0)" onclick="pywebview.api.open_github()">GitHub &#x2197;</a>
@@ -1977,6 +1990,27 @@ function paintEq(){
   } else { err.style.display = 'none'; }
   hint.textContent = 'extension active — Equalizer APO';
 }
+// ---- History card (v1.9) ----
+function renderHistory(){
+  const list = document.getElementById('histlist');
+  const h = (S && S.history) || [];
+  if (!h.length){
+    list.innerHTML = '<div class="histempty">Nothing yet — events like fallback switches will show up here.</div>';
+    return;
+  }
+  list.innerHTML = h.map(e => {
+    const d = new Date(e.ts * 1000);
+    const ts = d.toLocaleString(undefined,
+      {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+    const n = e.n > 1 ? ` <span class="histn">×${e.n}</span>` : '';
+    return `<div class="histrow"><span class="histts">${esc(ts)}</span><span>${esc(e.text)}${n}</span></div>`;
+  }).join('');
+}
+async function clearHistory(){
+  await pywebview.api.clear_history();
+  if (S) S.history = [];       // S-sync: keep working copy honest
+  renderHistory();
+}
 ['eqgainr','eqbassr'].forEach(id => document.getElementById(id).addEventListener('input', e => {
   const t = id === 'eqgainr' ? 'gainDb' : 'bassDb';
   S.micEq[t] = +e.target.value;
@@ -2015,6 +2049,7 @@ async function refresh(profile){
   renderList('mic');
   renderHk();
   paintEq();
+  renderHistory();
   document.getElementById('sw_enforce').checked = s.enforce;
   document.getElementById('sw_startup').checked = s.runAtStartup;
   document.getElementById('sw_updates').checked = s.checkUpdates;
@@ -2868,6 +2903,7 @@ class App:
                     "version": VERSION,
                     "recommended": RECOMMENDED_VOLUME,
                     "sessions": _session_names(),
+                    "history": app.history.snapshot(100),
                 }
 
             def new_profile(self_api, name, source=None):
@@ -3044,6 +3080,10 @@ class App:
 
             def open_github(self_api):
                 webbrowser.open(f"https://github.com/{GITHUB_REPO}")
+
+            def clear_history(self_api):
+                app.history.clear()
+                return {"ok": True}
 
             def check_updates(self_api):
                 # blocks this webview worker thread until the check (and any
