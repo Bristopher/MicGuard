@@ -81,7 +81,7 @@ Two layers, both in `micguard.py`, near `heal_stale_ids`:
 | `recover` | same call site as `fallback` | availability-driven switch back to the flow's #1 priority device (checked via `active_profile_lists`) — same profile-switch suppression as `fallback` above |
 | `reassert` | `Enforcer._enforce_flow` | the default endpoint drifted (something else changed it) and MicGuard's `SetDefaultEndpoint` snapped it back — coalesces heavily under a misbehaving game (one row, `×N`). Gated on `same_want` (the wanted device unchanged since the previous pass): availability-driven switches, profile switches, and the first startup pass do NOT record `reassert` — a real availability fallback/recover is covered by its own `fallback`/`recover` row, while a profile switch is covered ONLY by its own `profile` row (no `fallback`/`recover` row — see above) |
 | `heal` | `Enforcer._enforce_flow` (via `heal_stale_ids`) | a saved device's ID was re-adopted after Windows re-enumerated it (USB replug) with the same name, new ID |
-| `profile` | `set_profile` js_api handler | active profile switched (tray, settings, or hotkey path — all converge here) |
+| `profile` | `App.set_profile` | active profile switched (tray, settings, or hotkey path — all converge here) |
 | `save` | settings `save()` js_api handler | Settings window Save |
 | `eq` | `App._setup_mic_eq` | guided Mic EQ setup completed (Equalizer APO detected installed) |
 
