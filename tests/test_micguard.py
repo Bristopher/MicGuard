@@ -613,3 +613,11 @@ class TestHealStaleIds(unittest.TestCase):
                    {"id": "y", "name": "Mic B", "volume": 60}]
         self.assertTrue(m.heal_stale_ids(entries, devices))
         self.assertEqual([e["id"] for e in entries], ["m1", "m2"])
+
+    def test_two_stale_entries_one_device_first_wins(self):
+        devices = [("new-id", "AT2020 Headphones")]
+        entries = [{"id": "stale1", "name": "AT2020 Headphones", "volume": 42},
+                   {"id": "stale2", "name": "AT2020 Headphones", "volume": 60}]
+        self.assertTrue(m.heal_stale_ids(entries, devices))
+        self.assertEqual(entries[0]["id"], "new-id")   # first priority wins
+        self.assertEqual(entries[1]["id"], "stale2")   # second stays stale

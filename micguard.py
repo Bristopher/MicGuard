@@ -3376,20 +3376,24 @@ class App:
                 for _ in range(15):
                     time.sleep(0.1)
                     if not u.IsIconic(game_hwnd):
+                        # Review C2: order of events is the only reliable
+                        # alt-tab discriminator. A USER switch moves focus
+                        # while the game is still up (the auto-minimize
+                        # follows); a popup-CAUSED minimize goes iconic
+                        # first and only then hands focus to explorer/
+                        # whatever — so checking foreground AFTER iconic
+                        # false-negatives the learn. Focus moved to another
+                        # app while the game is up → the user is leaving;
+                        # end the probe, learn nothing.
+                        fg = u.GetForegroundWindow()
+                        if fg and fg != game_hwnd:
+                            fg_exe = get_foreground_exe()
+                            if fg_exe and fg_exe.lower() != game_exe.lower():
+                                log.info("fse probe: user switched to %s — "
+                                         "probe ends, not learning", fg_exe)
+                                return
                         continue
-                    # Review I1: the game also auto-minimizes when the USER
-                    # alt-tabs away (exclusive apps do that on focus loss).
-                    # If another real app is foreground now, this wasn't the
-                    # popup's doing — hide it and change nothing.
-                    fg_exe = get_foreground_exe()
-                    if fg_exe and fg_exe.lower() != game_exe.lower():
-                        try:
-                            hide()
-                        except Exception:
-                            pass
-                        log.info("fse probe: %s minimized on focus switch to "
-                                 "%s — not learning", game_exe, fg_exe)
-                        return
+                    # iconic with no prior user switch → the popup did it
                     try:
                         hide()
                     except Exception:
