@@ -485,7 +485,7 @@ caused); desktop smoke (popup on cursor monitor, no probe).
 
 ## 14. Event history (v1.9)
 
-**Shipped:** `555f236`..`1ebb3da` on `main`, ship date 2026-07-17 — NOT yet
+**Shipped:** `555f236`..`f08f609` on `main` (incl. the final-review fix round: reassert gating, bounded coalesce lookback, locked writes, live save row), ship date 2026-07-17 — NOT yet
 released; will ship inside whatever release `VERSION` gets pre-stamped for
 next. A human-readable log of notable events (device fallbacks/recoveries,
 coalesced default re-asserts, self-heals, profile switches, settings saves,
@@ -495,9 +495,10 @@ other per-enforcement-pass noise are deliberately NEVER recorded. Full
 design: [superpowers/specs/2026-07-17-event-history-design.md](../superpowers/specs/2026-07-17-event-history-design.md).
 Feature doc: [Features/Event-History.md](../Features/Event-History.md).
 
-**Machine-verified:** `uv run pytest -q` — 101/101 green, including the 13
-new pure/hardware-free tests (`TestHistoryPush` — 6: append, coalesce
-hit/miss on kind/text/window edge, only-newest-coalesces, cap trim keeping
+**Machine-verified:** `uv run pytest -q` — 104/104 green, including the 16
+new pure/hardware-free tests (`TestHistoryPush` — 9: append, coalesce
+hit/miss on kind/text/window edge, bounded 8-entry lookback w/ move-to-end,
+alternating-pair coalescing, cap trim keeping
 newest last; `TestHistoryRecorder` — 7: add/flush/reload round-trip,
 missing-file-starts-empty, corrupt-file-starts-empty, invalid-shape entries
 dropped on load, snapshot newest-first/capped/copies-not-refs, clear empties

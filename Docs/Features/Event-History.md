@@ -33,9 +33,13 @@ Two layers, both in `micguard.py`, near `heal_stale_ids`:
 1. **Pure coalesce core** (no I/O, fully pytest-covered):
    - `history_push(entries, kind, text, now, cap=HISTORY_CAP, window=HISTORY_COALESCE_S) -> list`
      — appends `{"ts": now, "kind": kind, "text": text, "n": 1}` to `entries`,
-     UNLESS the newest entry already has the same `kind` and `text` and
-     `now - newest.ts <= window`, in which case it bumps that entry's `n` and
-     refreshes its `ts` instead (coalescing). Trims from the front (oldest)
+     UNLESS one of the LAST 8 entries (scanned newest→oldest) has the same
+     `kind` and `text` with `now - its ts <= window`, in which case it bumps
+     that entry's `n`, refreshes its `ts`, and MOVES it to the end so it
+     stays the newest row (coalescing). The bounded lookback exists so two
+     alternating events — e.g. capture and render re-asserts from a headset
+     suite fighting both flows — still coalesce into two `×N` rows instead
+     of two rows per pass flooding the cap. Trims from the front (oldest)
      once `entries` exceeds `cap`. Newest entry is always LAST in the list;
      the UI/`snapshot()` reverses it for newest-first display. Mutates and
      returns `entries` — no globals, no I/O, direct pytest target.
@@ -75,7 +79,7 @@ Two layers, both in `micguard.py`, near `heal_stale_ids`:
 | `quit` | `App._quit()` | tray/menu Quit — also calls `flush()` synchronously, since the debounce timer won't survive process exit |
 | `fallback` | `App.notify_fallback` (called from `Enforcer._enforce_flow`'s `on_fallback`) | availability-driven device switch where the new device is NOT the flow's #1 priority entry, or nothing connected at all |
 | `recover` | same call site as `fallback` | availability-driven switch back to the flow's #1 priority device (checked via `active_profile_lists`) |
-| `reassert` | `Enforcer._enforce_flow` | the default endpoint drifted (something else changed it) and MicGuard's `SetDefaultEndpoint` snapped it back — coalesces heavily under a misbehaving game (one row, `×N`) |
+| `reassert` | `Enforcer._enforce_flow` | the default endpoint drifted (something else changed it) and MicGuard's `SetDefaultEndpoint` snapped it back — coalesces heavily under a misbehaving game (one row, `×N`). Gated on `same_want` (the wanted device unchanged since the previous pass): availability-driven switches, profile switches, and the first startup pass do NOT record `reassert` — those flows are covered by their own `fallback`/`recover`/`profile` rows |
 | `heal` | `Enforcer._enforce_flow` (via `heal_stale_ids`) | a saved device's ID was re-adopted after Windows re-enumerated it (USB replug) with the same name, new ID |
 | `profile` | `set_profile` js_api handler | active profile switched (tray, settings, or hotkey path — all converge here) |
 | `save` | settings `save()` js_api handler | Settings window Save |
@@ -172,11 +176,13 @@ intentional, not a gap.
 ## Testing
 
 `tests/test_micguard.py`:
-- `TestHistoryPush` (6 tests) — appends a new event; coalesces same
+- `TestHistoryPush` (9 tests) — appends a new event; coalesces same
   kind/text within the window (bumping `n`, refreshing `ts`); the window
   edge (`<= window` coalesces, `> window` doesn't); different text or kind
-  never coalesces; only the NEWEST entry is eligible to coalesce into; trims
-  from the front once over `cap`, keeping newest last.
+  never coalesces; bounded-lookback semantics (a match within the last 8
+  entries coalesces and moves to the end; a match 9+ back does not);
+  alternating A/B/A/B pairs coalesce into two `×2` rows; trims from the
+  front once over `cap`, keeping newest last.
 - `TestHistoryRecorder` (7 tests) — add→flush→reload round-trip; missing
   file starts empty; corrupt file starts empty; invalid-shape entries are
   dropped on load; `snapshot()` returns newest-first, capped, and
@@ -185,7 +191,7 @@ intentional, not a gap.
   never raise even when the target directory doesn't exist (`Z:\no\such\dir`).
 
 ```powershell
-uv run pytest -q                                 # 101 passing, includes these 13
+uv run pytest -q                                 # 104 passing, includes these 16
 ```
 
 Live smoke (manual, no fixture for real Core Audio events):
