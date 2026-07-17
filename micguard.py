@@ -2410,6 +2410,10 @@ class Enforcer(threading.Thread):
             # adopt + persist so priority order survives USB replugs
             save_config(self.app.cfg)
             log.info("%s: re-adopted device id(s) by name after re-enumeration", key)
+            self.app.history.add(
+                "heal",
+                f"Re-adopted {'mic' if key == 'capture' else 'output'} device "
+                f"ID(s) after USB re-enumeration")
         active_ids = {i for i, _ in devices}
         want = pick_device(entries, active_ids)
         prev = self.enforced[key]
@@ -2427,6 +2431,10 @@ class Enforcer(threading.Thread):
                 log.info("%s default drifted (role %s) — restoring %s",
                          key, role.name, want.get("name"))
                 set_default_endpoint(want["id"])
+                self.app.history.add(
+                    "reassert",
+                    f"{'Mic' if key == 'capture' else 'Output'} default "
+                    f"re-asserted — {want.get('name') or want['id']}")
                 break
         hold = key == "capture" or want.get("hold_volume")
         if key == "capture" and self.hold_volume:
@@ -2474,6 +2482,7 @@ class App:
                 self.cfg["profiles"][0]["mics"] = [
                     {"id": device_id, "name": device_name or "", "volume": volume}]
             save_config(self.cfg)
+        self.history = HistoryRecorder()
         self.enforcer = Enforcer(self, on_fallback=self.notify_fallback)
         self.icon = None
         self._settings_win = None
@@ -2542,6 +2551,10 @@ class App:
         import pystray
         import webview
         self.enforcer.start()
+        if "--updated" in sys.argv:
+            self.history.add("update", f"Updated — now running v{VERSION}")
+        else:
+            self.history.add("start", f"MicGuard v{VERSION} started")
         # Re-assert the Mic EQ file at startup — otherwise a fallback that
         # happened last session (rewriting MicGuard-Mic.txt to the backup
         # mic) never gets corrected on the next boot, since the Enforcer's
@@ -2617,6 +2630,8 @@ class App:
         # destroying every webview window makes webview.start() return in
         # run(), which stops the tray icon and the enforcer
         import webview
+        self.history.add("quit", "MicGuard quit")
+        self.history.flush()   # debounce won't survive process exit
         if self._alert_timer:
             self._alert_timer.cancel()
             self._alert_timer = None
@@ -2742,6 +2757,7 @@ class App:
             cfg_dir = apo_config_dir()
             if cfg_dir:
                 self._apply_mic_eq()               # pre-write so EQ is live post-reboot
+                self.history.add("eq", "Mic EQ set up — Equalizer APO installed")
                 if self._dialog(
                     "askyesno",
                     "Equalizer APO is installed. Windows needs a reboot before "
@@ -3007,6 +3023,8 @@ class App:
                                   "gain_db": me.get("gainDb", 0),
                                   "bass_db": me.get("bassDb", 0)}
                 app._apply_mic_eq()
+                app.history.add("save",
+                                f"Settings saved — profile “{prof['name']}” active")
                 save_config(app.cfg)
                 try:
                     set_run_at_startup(app.cfg["run_at_startup"])
@@ -3199,6 +3217,7 @@ class App:
                 if any(p["name"] == name for p in app.cfg["profiles"]):
                     app.cfg["active_profile"] = name
                     save_config(app.cfg)
+                    app.history.add("profile", f"Profile switched to {name}")
                     app.enforcer._set_once_done.clear()
                     app.enforcer.reattach()
                     app.enforcer.poke()
@@ -3407,6 +3426,14 @@ class App:
             else:
                 return
             log.info("fallback alert: %s — %s", title, sub)
+            if now_entry is None:
+                hkind = "fallback"
+            else:
+                mics, outputs = active_profile_lists(self.cfg)
+                lst = mics if flow_label == "capture" else outputs
+                hkind = ("recover" if lst and
+                         lst[0].get("id") == now_entry.get("id") else "fallback")
+            self.history.add(hkind, f"{title} — {sub}")
             if flow_label == "capture":
                 self._apply_mic_eq(enforced_override=now_entry)
             if not self.cfg.get("notify_fallback"):
