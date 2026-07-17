@@ -522,3 +522,45 @@ class TestEqFallbackFollowsNewMic(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPickPopupMonitor(unittest.TestCase):
+    MONS = [(1, (0, 0, 2560, 1392)), (2, (2560, 0, 1920, 1032))]
+
+    def test_not_exclusive_uses_cursor_monitor(self):
+        self.assertEqual(m.pick_popup_monitor(False, "auto", False, 2, 0, self.MONS),
+                         ((2560, 0, 1920, 1032), False))
+
+    def test_off_mode_suppresses(self):
+        self.assertEqual(m.pick_popup_monitor(True, "off", False, 1, 1, self.MONS),
+                         (None, False))
+
+    def test_auto_tries_the_games_own_monitor(self):
+        rect, tried = m.pick_popup_monitor(True, "auto", False, 1, 1, self.MONS)
+        self.assertEqual(rect, (0, 0, 2560, 1392))
+        self.assertTrue(tried)
+
+    def test_blacklisted_exe_relocates(self):
+        rect, tried = m.pick_popup_monitor(True, "auto", True, 1, 1, self.MONS)
+        self.assertEqual(rect, (2560, 0, 1920, 1032))
+        self.assertFalse(tried)
+
+    def test_other_mode_prefers_cursor_when_off_game(self):
+        rect, tried = m.pick_popup_monitor(True, "other", False, 2, 1, self.MONS)
+        self.assertEqual(rect, (2560, 0, 1920, 1032))
+        self.assertFalse(tried)
+
+    def test_other_mode_single_monitor_suppresses(self):
+        self.assertEqual(m.pick_popup_monitor(True, "other", False, 1, 1,
+                                              [(1, (0, 0, 2560, 1392))]),
+                         (None, False))
+
+    def test_auto_single_monitor_still_tries(self):
+        rect, tried = m.pick_popup_monitor(True, "auto", False, 1, 1,
+                                           [(1, (0, 0, 2560, 1392))])
+        self.assertEqual(rect, (0, 0, 2560, 1392))
+        self.assertTrue(tried)
+
+    def test_no_monitors(self):
+        self.assertEqual(m.pick_popup_monitor(True, "auto", False, 0, 0, []),
+                         (None, False))

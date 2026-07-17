@@ -59,6 +59,11 @@ DEFAULT_CONFIG = {
     },
     "mixer_nav": "digits",     # "digits" (1-9 pick, up/down nudge) | "arrows" (up/down pick, left/right nudge)
     "mixer_meters": True,      # live level pulse on the mixer bars
+    # popups over exclusive-fullscreen games: "auto" tries the game's own
+    # monitor first and learns per-exe failures (spec 2026-07-16);
+    # "other" = always the game-free monitor; "off" = suppress
+    "fullscreen_popups": "auto",
+    "fse_incompatible": [],    # learned exes that minimize under same-monitor popups
     "run_at_startup": True,
     "check_updates": True,
 }
@@ -465,13 +470,40 @@ def _enum_monitor_work_rects() -> list[tuple[int, tuple[int, int, int, int]]]:
     return out
 
 
-def popup_monitor_rect() -> tuple[int, int, int, int] | None:
-    """Work rect (x, y, w, h) of the monitor a popup may safely appear on.
-    Normally the cursor's monitor. When a D3D exclusive-fullscreen app is
-    foreground, drawing on ITS monitor breaks exclusive mode and minimizes
-    the game (Bristopher, R6 Siege 2026-07-16) — so pick a monitor the game
-    does NOT own instead; None (= suppress the popup) only when the game
-    owns the only monitor."""
+def pick_popup_monitor(exclusive: bool, mode: str, blacklisted: bool,
+                       cursor_mon: int, game_mon: int, monitors: list):
+    """PURE monitor choice for a popup. monitors = [(hmon, rect), ...].
+    Returns (rect | None, tried_same) — tried_same True ONLY when we chose
+    the exclusive game's own monitor (auto-learn mode, exe not yet learned):
+    the caller must arm the minimize-probe in exactly that case."""
+    rects = dict(monitors)
+    if not monitors:
+        return None, False
+    if not exclusive:
+        return rects.get(cursor_mon, monitors[0][1]), False
+    if mode == "off":
+        return None, False
+    if mode == "auto" and not blacklisted:
+        # same-monitor priority (spec 2026-07-16): the exclusive flag says
+        # what the game REQUESTED, not what Windows granted — most Win11
+        # titles tolerate a no-activate overlay; the probe catches the rest
+        return rects.get(game_mon, monitors[0][1]), True
+    # "other" mode or a learned-incompatible exe: v1.7 relocation behavior
+    if cursor_mon != game_mon and cursor_mon in rects:
+        return rects[cursor_mon], False
+    for mon, rect in monitors:
+        if mon != game_mon:
+            return rect, False
+    return None, False
+
+
+def popup_monitor_rect(cfg: dict | None = None):
+    """(work rect | None, tried_same) for the monitor a popup should use.
+    Normally the cursor's monitor. Over an exclusive-fullscreen game the
+    behavior follows cfg["fullscreen_popups"]: "auto" (default) tries the
+    game's own monitor first — the caller arms the auto-learn probe when
+    tried_same is True — while learned-incompatible exes and "other" mode
+    relocate to a game-free monitor, and "off" suppresses (rect None)."""
     u = ctypes.windll.user32
     MONITOR_DEFAULTTONEAREST = 2
     # HMONITOR is pointer-sized; the default c_int restype truncates on x64
@@ -482,24 +514,23 @@ def popup_monitor_rect() -> tuple[int, int, int, int] | None:
     monitors = _enum_monitor_work_rects()
     if not monitors:
         if exclusive:
-            return None
+            return None, False
         import webview
         s = webview.screens[0]
-        return (0, 0, s.width, s.height)
-    rects = dict(monitors)
+        return (0, 0, s.width, s.height), False
     pt = ctypes.wintypes.POINT()
     u.GetCursorPos(ctypes.byref(pt))
     cursor_mon = int(u.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) or 0)
-    if not exclusive:
-        return rects.get(cursor_mon, monitors[0][1])
-    game_mon = int(u.MonitorFromWindow(u.GetForegroundWindow(),
-                                       MONITOR_DEFAULTTONEAREST) or 0)
-    if cursor_mon != game_mon and cursor_mon in rects:
-        return rects[cursor_mon]
-    for mon, rect in monitors:
-        if mon != game_mon:
-            return rect
-    return None
+    game_mon, blacklisted = 0, False
+    cfg = cfg or {}
+    if exclusive:
+        game_mon = int(u.MonitorFromWindow(u.GetForegroundWindow(),
+                                           MONITOR_DEFAULTTONEAREST) or 0)
+        exe = (get_foreground_exe() or "").lower()
+        blacklisted = bool(exe) and exe in cfg.get("fse_incompatible", [])
+    mode = cfg.get("fullscreen_popups", "auto")
+    return pick_popup_monitor(exclusive, mode, blacklisted,
+                              cursor_mon, game_mon, monitors)
 
 
 def get_foreground_exe() -> str | None:
@@ -1451,6 +1482,16 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
   <label class="switch"><input type="checkbox" id="sw_mixmeters"
     onchange="S && (S.mixerMeters = this.checked)"><span class="knob"></span></label>
 </div>
+<div class="switchrow">
+  <div><div class="lab">Popups over fullscreen games</div>
+       <div class="hint">Try same monitor: popups show on the game's screen; a game that truly can't take it blinks ONCE, then MicGuard remembers it and uses your other monitor</div></div>
+  <div class="select-wrap"><select id="fspop"
+    onchange="S && (S.fullscreenPopups = this.value)">
+    <option value="auto">Try same monitor (auto-learn)</option>
+    <option value="other">Other monitor</option>
+    <option value="off">Hide</option>
+  </select></div>
+</div>
 
 <div class="sec"><label>Mic EQ <span class="dim">(optional extension)</span></label></div>
 <div id="eqcard">
@@ -1731,6 +1772,7 @@ function renderHk(){
   document.getElementById('sw_hotkeys').checked = !!S.hotkeys.enabled;
   document.getElementById('mixnav').value = S.mixerNav || 'digits';
   document.getElementById('sw_mixmeters').checked = S.mixerMeters !== false;
+  document.getElementById('fspop').value = S.fullscreenPopups || 'auto';
 }
 // combo capture: focus the field and press keys; Escape clears
 // whitelist mirrors parse_hotkey()'s _VKS + single alpha/digit support —
@@ -1864,6 +1906,7 @@ async function save(){
     notifyFallback: document.getElementById('sw_fallback').checked,
     mixerNav: document.getElementById('mixnav').value,
     mixerMeters: document.getElementById('sw_mixmeters').checked,
+    fullscreenPopups: document.getElementById('fspop').value,
     micEq: S.micEq,
   });
   S.hotkeyFailures = (r && r.hotkeyFailures) || [];
@@ -2647,6 +2690,7 @@ class App:
                     "notifyFallback": bool(app.cfg["notify_fallback"]),
                     "mixerNav": app.cfg.get("mixer_nav", "digits"),
                     "mixerMeters": bool(app.cfg.get("mixer_meters", True)),
+                    "fullscreenPopups": app.cfg.get("fullscreen_popups", "auto"),
                     "micEq": app._mic_eq_state(sel),
                     "version": VERSION,
                     "recommended": RECOMMENDED_VOLUME,
@@ -2797,6 +2841,9 @@ class App:
                 nav = state.get("mixerNav")
                 app.cfg["mixer_nav"] = nav if nav in ("digits", "arrows") else "digits"
                 app.cfg["mixer_meters"] = bool(state.get("mixerMeters", True))
+                fsp = state.get("fullscreenPopups")
+                app.cfg["fullscreen_popups"] = (fsp if fsp in ("auto", "other", "off")
+                                                else "auto")
                 me = state.get("micEq") or {}
                 prof["mic_eq"] = {"enabled": bool(me.get("enabled")),
                                   "gain_db": me.get("gainDb", 0),
@@ -3206,9 +3253,9 @@ class App:
                 self._apply_mic_eq(enforced_override=now_entry)
             if not self.cfg.get("notify_fallback"):
                 return
-            rect = popup_monitor_rect()
+            rect, try_same = popup_monitor_rect(self.cfg)
             if rect is None:
-                log.info("fallback alert suppressed: exclusive fullscreen owns the only monitor")
+                log.info("fallback alert suppressed: fullscreen popups off / no safe monitor")
                 return
             if self._alert_win is None:
                 self._make_alert_window()
@@ -3223,6 +3270,8 @@ class App:
             self._show_noactivate(self._alert_win, f"{APP_NAME} Alert",
                                   mx + mw - ALERT_W - 16,
                                   my + mh - ALERT_H - 56)
+            if try_same:
+                self._arm_fse_probe(self._hide_alert)
             if self._alert_timer:
                 self._alert_timer.cancel()
             self._alert_timer = threading.Timer(8.0, self._hide_alert)
@@ -3263,14 +3312,63 @@ class App:
         except Exception:
             pass
 
+    def _arm_fse_probe(self, hide, reshow=None):
+        """Auto-learn for same-monitor popups over exclusive fullscreen
+        (spec 2026-07-16): we just showed a popup on the game's own monitor
+        because the exclusive flag only reports what the game REQUESTED. If
+        the game minimizes within 1.5 s the overlay really broke exclusive
+        mode — hide the popup, restore the game, remember the exe in
+        cfg["fse_incompatible"], and re-place via `reshow` (now that the exe
+        is learned, the pick relocates to the other monitor). Ban-proof by
+        construction: only OUR windows are shown/hidden and only public
+        window state (foreground hwnd, IsIconic) is read. One probe at a
+        time; the popup is no-activate so the game is still foreground at
+        arm time."""
+        if getattr(self, "_fse_probe_live", False):
+            return
+        u = ctypes.windll.user32
+        game_hwnd = u.GetForegroundWindow()
+        game_exe = get_foreground_exe()
+        if not game_hwnd or not game_exe:
+            return
+        self._fse_probe_live = True
+
+        def probe():
+            try:
+                for _ in range(15):
+                    time.sleep(0.1)
+                    if u.IsIconic(game_hwnd):
+                        try:
+                            hide()
+                        except Exception:
+                            pass
+                        u.ShowWindow(game_hwnd, 9)          # SW_RESTORE
+                        low = game_exe.lower()
+                        if low not in self.cfg.get("fse_incompatible", []):
+                            self.cfg.setdefault("fse_incompatible", []).append(low)
+                            save_config(self.cfg)
+                        log.info("%s minimizes under same-monitor popups — "
+                                 "learned; using the other monitor from now on",
+                                 game_exe)
+                        if reshow:
+                            time.sleep(0.3)                 # let the restore settle
+                            reshow()
+                        return
+            except Exception as e:
+                log.warning("fse probe failed: %s", e)
+            finally:
+                self._fse_probe_live = False
+
+        threading.Thread(target=probe, daemon=True, name="fse-probe").start()
+
     def show_osd(self, label, percent):
         """Volume OSD, bottom-center, no focus steal. Called from the
         HotkeyManager thread — never raises (a broken OSD must not take the
         hotkeys down with it)."""
         try:
-            rect = popup_monitor_rect()
+            rect, try_same = popup_monitor_rect(self.cfg)
             if rect is None:
-                return  # exclusive fullscreen owns the only monitor
+                return  # fullscreen popups off / no safe monitor
             if self._osd_win is None:
                 self._make_osd_window()
             if not self._osd_primed:
@@ -3301,6 +3399,8 @@ class App:
             self._show_noactivate(self._osd_win, f"{APP_NAME} OSD",
                                   mx + (mw - OSD_W) // 2,
                                   my + mh - (self._osd_h or OSD_H) - 90)
+            if try_same:
+                self._arm_fse_probe(self._hide_osd)
             if self._osd_timer:
                 self._osd_timer.cancel()
             self._osd_timer = threading.Timer(1.2, self._hide_osd)
@@ -3403,28 +3503,28 @@ class App:
                 self._mixer_win.resize(MIXER_W, h)
                 pos = self._mixer_position(h)
                 if pos:
-                    self._mixer_win.move(*pos)
+                    self._mixer_win.move(pos[0], pos[1])
             except Exception as e:
                 log.warning("mixer resize-on-count-change failed: %s", e)
         else:
             self._mixer_vis_n = vis_n
 
     def _mixer_position(self, h):
-        """Bottom-center of a safe monitor (cursor's monitor normally; a
-        monitor the game does NOT own during exclusive fullscreen), 80 px up
-        from the work-area bottom (gkey-style placement). None = no safe
-        monitor exists — the caller suppresses the popup."""
-        rect = popup_monitor_rect()
+        """(x, y, tried_same) — bottom-center of the popup monitor, 80 px up
+        from the work-area bottom (gkey-style). Same-monitor priority over
+        exclusive fullscreen per cfg["fullscreen_popups"]; None = suppressed
+        ("off" mode / no safe monitor)."""
+        rect, try_same = popup_monitor_rect(self.cfg)
         if rect is None:
             return None
         mx, my, mw, mh = rect
-        return mx + (mw - MIXER_W) // 2, my + mh - h - 80
+        return mx + (mw - MIXER_W) // 2, my + mh - h - 80, try_same
 
     def _show_mixer(self):
-        if popup_monitor_rect() is None:
-            # exclusive-fullscreen game owns the ONLY monitor — drawing over
-            # it would minimize it; nudge hotkeys still work, popup suppressed
-            log.info("mixer suppressed: exclusive fullscreen owns the only monitor")
+        if popup_monitor_rect(self.cfg)[0] is None:
+            # "off" mode, or an exclusive game owns the only usable monitor —
+            # nudge hotkeys still work, popup suppressed
+            log.info("mixer suppressed: fullscreen popups off / no safe monitor")
             return
         _co_initialize()
         if self._mixer_win is None:
@@ -3443,11 +3543,15 @@ class App:
         h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
         self._mixer_win.resize(MIXER_W, int(h))
         pos = self._mixer_position(int(h))
-        if pos is None:      # exclusive fullscreen claimed the last safe monitor mid-open
+        if pos is None:      # placement became unsafe mid-open
             return
-        x, y = pos
+        x, y, try_same = pos
         self._show_noactivate(self._mixer_win, f"{APP_NAME} Mixer", x, y)
         self._mixer_shown = True        # now _refresh_mixer may resize on count change
+        if try_same:
+            # auto-learn: if the game minimizes, hide + restore + learn the
+            # exe, then reopen — the pick then relocates to the other monitor
+            self._arm_fse_probe(self._hide_mixer, reshow=self._show_mixer)
         self._arm_mixer_timer()                      # each key press re-arms it
         if self.hotkeys:
             self.hotkeys.set_mixer_keys(True)
