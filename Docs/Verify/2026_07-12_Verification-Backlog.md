@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-16 — §12 added (v1.8 Mic EQ extension), §12 item 6 (final-review minor triage)
+**Updated:** 2026-07-16 — §13 added: same-monitor popup auto-learn (Siege) + stale-device-id self-heal (the 2nd-priority screenshot bug); §12 item 6 minor triage
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -438,6 +438,42 @@ run can.
    APO block. Flag any of these if actually hit during testing.
 
 ---
+
+## 13. v1.8 late round — same-monitor popup auto-learn + stale-device-id self-heal (~5 min + one Siege session)
+
+**Shipped:** `40091cf`..`a7891e9` on `main`, ship date 2026-07-16 — NOT yet
+released; installed in the 1.8.0 test build. Two features born from your
+reports: "I WANT A BETTER SAME MONITOR PRIORITY INTEGRATION" (Siege) and the
+"why is it auto device assigned my 2nd priority???" screenshot.
+**Machine-verified:** 83/83 pytest (pick_popup_monitor 10-case matrix,
+heal_stale_ids 7 cases); three adversarial review rounds (fixed en route: a
+reshow race that would have re-minimized the game, an alt-tab discriminator
+that first false-blacklisted then false-negatived — final form uses
+event-order: focus-move-while-game-up = user switch, iconic-first = popup-
+caused); desktop smoke (popup on cursor monitor, no probe).
+
+1. **The Siege test (the point of all this).** In EXCLUSIVE fullscreen press
+   shift+F3. Outcome A: the mixer appears on the GAME's monitor and Siege
+   keeps running — you have same-monitor popups, done. Outcome B: Siege
+   blinks ONCE (minimize + instant auto-restore), the mixer reopens on your
+   second monitor, the log gains "minimizes under same-monitor popups —
+   learned", and config.json's `fse_incompatible` gains the exe — every
+   press after that goes straight to the second monitor with no blink.
+   Either outcome is the feature working; report which you got.
+2. **Alt-tab immunity.** With the popup up over the game, alt-tab away
+   normally — the game may minimize (that's Windows), but the log must show
+   "user switched … not learning" and `fse_incompatible` must stay empty.
+3. **The dropdown.** Settings → "Popups over fullscreen games": switch to
+   "Other monitor" and confirm v1.7 behavior returns; "Hide" suppresses.
+4. **Headphones back on priority 1 (your screenshot).** After this build
+   launches, check the log for "render: re-adopted device id(s) by name" —
+   then mmsys.cpl → Playback should show *Headphones (2- AT2020USB+)* as
+   Default again (MicGuard healed the orphaned id and re-enforced priority
+   1). Also confirm settings row 1 no longer says "(not connected)".
+5. **Replug test.** Unplug/replug the AT2020's USB (or switch ports) —
+   within a couple of enforce passes the log shows the re-adoption line and
+   enforcement stays on the AT2020, no manual fixes. Judgment: is silent
+   self-heal right, or do you want a toast when ids are re-adopted?
 
 ## Sweep log (commit ranges reviewed for unverified work)
 
