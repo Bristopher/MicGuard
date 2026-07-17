@@ -28,6 +28,7 @@ about doesn't exist.
 | [superpowers/plans/2026-07-16 mic-eq-extension](superpowers/plans/2026-07-16-mic-eq-extension.md) | v1.8 implementation plan — 6 TDD tasks (pure renderer/writer cores, settings card, guided setup, enforcement wiring, docs+test build) |
 | [Future/Same-Monitor-Overlay-Exclusive-Fullscreen](Future/Same-Monitor-Overlay-Exclusive-Fullscreen.md) | Parked: same-monitor popups over exclusive fullscreen — options table (injection ❌ anti-cheat, z-band ❌ privileged, FSO/borderless ✅, Game Bar widget = future route) |
 | [superpowers/specs/2026-07-16 same-monitor-autolearn](superpowers/specs/2026-07-16-same-monitor-autolearn-design.md) | Shipped v1.8 design: same-monitor popup priority w/ FSE probe + per-exe auto-learn (`fullscreen_popups` auto/other/off, `fse_incompatible` list) |
+| [superpowers/specs/2026-07-17 event-history](superpowers/specs/2026-07-17-event-history-design.md) | Approved v1.9 design: event history (fallbacks/recoveries, coalesced re-asserts, profile/save, lifecycle/heals) — `history_push` pure core, debounced history.json, History card in Settings |
 | [Features/Mic-EQ-Extension](Features/Mic-EQ-Extension.md) | Shipped v1.8 feature doc: optional Mic EQ extension (gain + bass boost via Equalizer APO) — pure renderer/writer core, always-visible settings card, guided consent-based setup flow, enforced-mic-following wiring, API/config/testing/troubleshooting |
 
 ## Lifecycle folders
