@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-17 — §14 added: event history (v1.9)
+**Updated:** 2026-07-17 — §15 added: profile-switch hotkeys (v1.9)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -537,6 +537,60 @@ session can.
    naturally, does the fixed-height scroll area feel right with 10+ rows, and
    does the newest-first ordering match your expectation of "most recent at
    the top"?
+
+## 15. Profile-switch hotkeys (v1.9)
+
+**Shipped:** `4bc5ee4`..`e7abb12` on `main`, ship date 2026-07-17 — NOT yet
+released; will ship inside whatever release `VERSION` gets pre-stamped for
+next. Hotkey bindings can now target a profile switch — `profile:next`
+cycles to the next profile in order (wrapping; `"next"` reserved even over a
+profile literally named that), `profile:<name>` jumps straight to a named
+profile — routed through the single `App.set_profile` path the tray menu
+already used, with a text-mode OSD (`show_osd(label, percent, note=...)`)
+reporting `switched` / `already active` / `not found`. Full design:
+[superpowers/specs/2026-07-17-profile-hotkeys-design.md](../superpowers/specs/2026-07-17-profile-hotkeys-design.md).
+Feature doc:
+[Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md#profile-switch-hotkeys-v19).
+
+**Machine-verified:** `uv run pytest -q` — 116/116 green, including the 12
+new pure/hardware-free tests (`TestNextProfile` — 5: two-profile cycle
+forward, wraps last-to-first, single profile returns itself, unknown active
+falls back to first, no profiles returns empty string;
+`TestResolveProfileTarget` — 7: `next` resolves to the cycle successor, a
+named existing profile resolves to itself, a named missing profile is
+`None`, a bare `"profile:"` prefix is `None`, non-`profile:` targets are
+`None`, a profile literally named `next` is shadowed by the cycle
+resolution — the pin from the design review, and an empty name never
+resolves). No COM/hardware; none of this exercises a real hotkey firing
+through `HotkeyManager`, the live OSD window, or the tray menu — only a live
+session can.
+
+1. **Both target forms, real switch.** Bind `profile:next` to one hotkey and
+   `profile:<a-named-profile>` to another. Press each in-game — confirm the
+   OSD shows `Profile: <name>` with `switched` as plain TEXT (no volume bar,
+   no "no audio" wording), and that BOTH the mic and the output actually
+   switch to that profile's devices/volumes.
+2. **Exactly one history row per press, tray included.** After each hotkey
+   press in #1, open Settings → History — confirm exactly ONE `profile` row
+   appears per press (not zero, not two). Also switch a profile from the
+   tray menu directly and confirm it still records exactly one `profile` row
+   — same code path, same guarantee.
+3. **Cycle wraps.** With exactly two profiles A and B active, press
+   `profile:next` repeatedly and confirm the sequence is A→B→A→B… (wraps
+   back to A, doesn't get stuck or skip).
+4. **Already-active is a no-op.** Press the hotkey for whichever profile is
+   currently active — confirm the OSD shows `already active` as text, NO new
+   history row appears, and nothing about the enforced device state changes
+   (no fallback popup, no re-assert churn visible in the log).
+5. **Stale binding after delete.** Bind a hotkey to a specific profile, then
+   delete that profile in Settings. Press the hotkey — confirm the OSD shows
+   `not found`, nothing about the current device state changes, and the
+   binding is still listed in Settings → Hotkeys showing the deleted
+   profile's name (not silently reverted to `system` or removed).
+6. **Step box disabled for profile targets.** In Settings → Hotkeys, set a
+   binding's target to `Next profile (cycle)` or any `Profile: <name>` entry
+   — confirm the step input shows `—` and is disabled/non-editable, same as
+   the `mixer` target.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

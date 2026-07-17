@@ -77,7 +77,13 @@ startup *action*, not a setting store), and no second file. Keep it that way.
 Each profile is a self-contained pair of ordered priority lists (see
 `active_profile_lists(cfg)` and `pick_device(entries, active_ids)` in
 [Features/Device-Priority-Profiles-Hotkeys.md](Features/Device-Priority-Profiles-Hotkeys.md)).
-`hotkeys.bindings[].target` is `"system"` or `"app:<exe-name>"`.
+`hotkeys.bindings[].target` is `"system"`, `"app:<exe-name>"`, `"active"`,
+`"mixer"`, or (v1.9) `"profile:next"` / `"profile:<profile-name>"` — see
+[Features/Device-Priority-Profiles-Hotkeys.md](Features/Device-Priority-Profiles-Hotkeys.md#profile-switch-hotkeys-v19)
+for target-form details. `profile:*` and `mixer` bindings always save with
+`step: 0`; `profile:<name>` is deliberately NOT checked against the current
+`profiles` list at save time — a stale name is guarded at fire time instead
+(`resolve_profile_target` returns `None`, the hotkey shows a "not found" OSD).
 
 As of v1.8, each profile dict also carries a `mic_eq` key (v1.8, Mic EQ
 extension — see [Features/Mic-EQ-Extension.md](Features/Mic-EQ-Extension.md)):

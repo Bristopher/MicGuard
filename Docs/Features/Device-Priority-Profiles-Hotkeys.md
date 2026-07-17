@@ -1,9 +1,9 @@
 # Device Priority Lists, Profiles, Fallback Alerts, Volume Hotkeys
 
-**Status:** ✅ Production (v1.5); mixer popup & boost added v1.6; nav modes/rolodex/pulse/mute added v1.7
+**Status:** ✅ Production (v1.5); mixer popup & boost added v1.6; nav modes/rolodex/pulse/mute added v1.7; profile-switch hotkeys added v1.9
 **Author:** Bristopher (design), AI-assisted implementation
-**Date:** 2026-07-15 (v1.7 additions)
-**Version:** 1.5.0 (mixer/boost/nav-rolodex-pulse-mute code lands ahead of the 1.7.0 tag — see RELEASING.md)
+**Date:** 2026-07-17 (v1.9 profile-switch hotkeys)
+**Version:** 1.5.0 (mixer/boost/nav-rolodex-pulse-mute/profile-hotkeys code lands ahead of the tag — see RELEASING.md)
 
 ---
 
@@ -84,9 +84,14 @@ flag is set, else set once at switch time).
   popup is open (known limitation: meters resolve once per open, see below)
 - ✅ (v1.7) 17 more pytest tests (`mixer_key_action` both modes, `mixer_viewport`,
   rolodex tier ordering, mute helpers) — suite is now 42 tests
+- ✅ (v1.9) Profile-switch hotkey targets — `profile:next` (cycle) and
+  `profile:<name>` (a specific profile), routed through the same
+  `App.set_profile` path the tray menu uses; see "Profile-switch hotkeys
+  (v1.9)" below
+- ✅ (v1.9) 12 more pytest tests (`TestNextProfile`, `TestResolveProfileTarget`)
+  — suite is now 116 tests
 
 ### Planned / deferred
-- 🔜 Hotkey profile cycling
 - 🔜 Auto-profile-switching by running app (would need process polling —
   banned by the Enforcer wake-queue convention; would need a different,
   event-driven detection mechanism to be considered)
@@ -258,6 +263,86 @@ pulse — the pump has no meter reference for it — until the popup is closed
 and reopened. This trades a small staleness window for avoiding a QI-per-tick
 COM cost; revisit only if it proves confusing in practice.
 
+## Profile-switch hotkeys (v1.9)
+
+A hotkey binding's `target` can now select a profile instead of nudging
+volume. Full design rationale:
+[superpowers/specs/2026-07-17-profile-hotkeys-design.md](../superpowers/specs/2026-07-17-profile-hotkeys-design.md);
+task-by-task plan:
+[superpowers/plans/2026-07-17-profile-hotkeys.md](../superpowers/plans/2026-07-17-profile-hotkeys.md).
+
+**Two target forms:**
+- `profile:next` — cycle to the profile after `active_profile` in `profiles`
+  order, wrapping. `next_profile(cfg)` is the pure resolver: unknown/missing
+  active profile falls back to the first profile; no profiles at all returns
+  `""`.
+- `profile:<name>` — switch straight to a specific profile by name.
+
+Both forms resolve through `resolve_profile_target(target, cfg) -> str | None`,
+the single pure mapper `_fire` calls: `"profile:next"` always means "the
+cycle successor" — **`"next"` is reserved even if a profile is literally
+named `next`**, so a profile named that way can only be targeted by editing
+the config by hand (documented tradeoff, not a bug). An empty name
+(`"profile:"`) and any name that doesn't match a profile both resolve to
+`None`.
+
+**Every profile switch goes through `App.set_profile(name) -> bool`.** This
+is deliberately the ONE switch path in the app — the tray menu's `set_profile`
+js_api handler and `HotkeyManager._fire`'s `profile:` branch both call it,
+never inlining the switch logic themselves. That's what guarantees exactly
+one `history.add("profile", ...)` row per switch regardless of which UI
+triggered it (see the Notable-event history row in
+[System-Conventions.md](../System-Conventions.md)). `set_profile` returns
+`False` for an unknown name (no-op) and otherwise persists
+`active_profile`, records the history row, clears the enforcer's
+once-done flag, `reattach()`/`poke()`s enforcement, and re-applies Mic EQ.
+
+**`HotkeyManager._fire` routing for `profile:` targets** (mirrors the design
+spec exactly):
+- Resolves to `None` (not found — includes a stale/deleted profile name) →
+  `show_osd(f"Profile: {name or '?'}", None, note="not found")`. No state
+  change, no history row.
+- Resolves to the CURRENTLY active profile → `show_osd(f"Profile: {name}",
+  None, note="already active")`. No history row, no enforcement churn — this
+  guards against a bound "already there" press causing a spurious re-assert.
+- Otherwise → `App.set_profile(name)` then `show_osd(f"Profile: {name}",
+  None, note="switched")`.
+
+**OSD text-note mode.** `App.show_osd(label, percent, note=None)` gained a
+third parameter; the OSD's `setOsd(label, pct, note)` JS checks `note` FIRST
+— when it's non-null the percent bar is hidden (`fill.style.width = '0%'`)
+and the note string replaces the percent text (dimmed), exactly like the
+existing "no audio" case but with caller-supplied text instead of a hardcoded
+string. Passing `percent=None` with no `note` still renders "no audio" —
+existing volume-hotkey OSD calls (`show_osd(label, percent)`) are
+unaffected; `note` only ever comes from the profile-hotkey call sites today.
+
+**Step forced to 0.** Like `mixer`, a `profile:*` target always saves with
+`step: 0` — profile switches have no notion of a step, so the settings save
+path clamps it (`step = 0 if target == "mixer" or target.startswith("profile:")
+else ...`) rather than trusting whatever stale step value sat in the row.
+
+**Deliberately no save-time name validation.** Unlike `app:<exe>` bindings
+(which reference a live audio session that may or may not exist right now
+anyway), a `profile:<name>` binding is NOT checked against the current
+`profiles` list when Settings saves. If the named profile is later renamed or
+deleted, the binding is left exactly as-is — it becomes a stale reference
+that `resolve_profile_target` will legitimately resolve to `None` the next
+time the hotkey fires, producing the "not found" OSD note rather than a
+silently-dropped or auto-rewritten binding. This keeps save-time logic simple
+and matches the spec's explicit call: guard at fire time, not save time.
+
+**Settings dropdown.** The hotkey target `<select>` now offers `'Next profile
+(cycle)'` (value `profile:next`) plus one `'Profile: <name>'` option per
+current profile (value `profile:<name>`), in addition to the existing
+`system`/`active`/`mixer`/`app:<exe>` options. If a binding's saved target
+isn't in the freshly-built option list (e.g. it points at a profile that was
+since deleted), the dropdown still shows it — pushed onto the options array
+with its resolved label (`hkTargetLabel` handles any `profile:` prefix
+generically) — so a stale binding stays visible and editable/removable
+instead of silently reverting to `system`. The step `<input>` renders `—` and
+is `disabled` for any `profile:` target, same treatment as `mixer`.
+
 ## Design Philosophy / Ideology
 
 - **Strict priority, not "sticky."** The highest-priority CONNECTED device
@@ -309,6 +394,13 @@ Pure functions (unit-tested, no COM/hardware):
 - (v1.7) `mixer_viewport(n_rows: int, selected: int, offset: int) ->
   (offset: int, dots_above: bool, dots_below: bool)` — pure clamp keeping
   `selected` inside the `MIXER_VISIBLE`-row window.
+- (v1.9) `next_profile(cfg) -> str` — the profile after `active_profile` in
+  `profiles` order, wrapping; unknown active → first profile; no profiles →
+  `""`.
+- (v1.9) `resolve_profile_target(target, cfg) -> str | None` — maps a
+  `profile:*` hotkey target to a profile name (`"next"` reserved for the
+  cycle even over a profile literally named that); `None` for anything
+  unresolvable, including an empty or non-matching name.
 
 Runtime classes/methods (COM/hardware-touching, verified live):
 
@@ -321,8 +413,15 @@ Runtime classes/methods (COM/hardware-touching, verified live):
 - `App.notify_fallback(flow_label, lost_name, now_entry)` — renders + shows
   the alert popup; logs unconditionally, popup gated on
   `cfg["notify_fallback"]`; never raises.
-- `App.show_osd(label, percent)` — renders + shows the hotkey OSD; never
-  raises (a broken OSD must not take hotkeys down with it).
+- `App.show_osd(label, percent, note=None)` — renders + shows the hotkey OSD;
+  never raises (a broken OSD must not take hotkeys down with it). (v1.9)
+  `note`, when given, replaces the percent text/bar with a dimmed status
+  string (`"not found"`, `"already active"`, `"switched"` for profile
+  targets) — see "Profile-switch hotkeys" above.
+- (v1.9) `App.set_profile(name) -> bool` — the ONE profile-switch path (tray
+  menu and profile hotkeys both call it); persists `active_profile`, records
+  exactly one `history.add("profile", ...)` row, `reattach()`/`poke()`s
+  enforcement, re-applies Mic EQ; `False` for an unknown name.
 - `App._restart_hotkeys()` — tears down and replaces the running
   `HotkeyManager` instance; called by settings Save when hotkeys config
   changed.
@@ -366,12 +465,16 @@ recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
 
 ## Testing
 
-- **Automated:** `uv run pytest -q` — `tests/test_micguard.py`, 42 tests
-  across `TestMigrateConfig`, `TestActiveProfileLists`, `TestPickDevice`,
-  `TestParseHotkey`, `TestBoostedNudge`/`TestBuildMixerRows` and the session-
-  helper tests (v1.6), and (v1.7) `mixer_key_action` across both nav modes ×
-  all keys, `mixer_viewport` offset/dots math, rolodex tier ordering/dedup,
-  and the mute helpers. No COM/hardware; safe in CI or on any machine.
+- **Automated:** `uv run pytest -q` — `tests/test_micguard.py`, 116 tests
+  (project-wide total) across `TestMigrateConfig`, `TestActiveProfileLists`,
+  `TestPickDevice`, `TestParseHotkey`, `TestBoostedNudge`/`TestBuildMixerRows`
+  and the session-helper tests (v1.6), (v1.7) `mixer_key_action` across both
+  nav modes × all keys, `mixer_viewport` offset/dots math, rolodex tier
+  ordering/dedup, and the mute helpers, and (v1.9) `TestNextProfile` (cycle
+  forward/wrap/single-profile/unknown-active/no-profiles) plus
+  `TestResolveProfileTarget` (cycle resolution, named-existing, named-missing,
+  bare-prefix, non-profile targets, the profile-literally-named-"next" pin,
+  empty-name-never-resolves). No COM/hardware; safe in CI or on any machine.
 - **Live harness pattern** (per AI-Development-Guide §6, no COM = no automated
   test): build a profile whose #1 mic id is a fake string to force a fallback
   pick, confirm the enforcer selects #2 and `on_fallback` fires; press a
@@ -390,7 +493,11 @@ recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
   fullscreen limitation acknowledgment, hotkey editor mixer target), and §11
   for the v1.7 nav/rolodex/pulse/mute list (arrow mode feel in a real game,
   8+ app rolodex scroll stability, mute during a real call, pulse readability
-  + the once-per-open limitation, settings save/reload).
+  + the once-per-open limitation, settings save/reload), and §15 for the
+  v1.9 profile-switch hotkeys list (OSD text-note rendering for each of
+  switched/already-active/not-found, single history row per switch from both
+  the tray and hotkeys, cycle wrap, stale-binding fire-time behavior, step
+  box disabled state).
 
 ## Troubleshooting
 
@@ -406,6 +513,8 @@ recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
 | Digits/arrows do nothing while the mixer is open | Ephemeral mixer keys failed to register (another app holds one) or the popup closed before the keypress | Check the log for `"mixer key vk=... unavailable — skipped"`; re-summon the popup with the mixer hotkey |
 | An app that just started playing doesn't pulse | Known v1.7 limitation — the meter pump resolves sessions once at popup-open time | Close and reopen the mixer; see "Live level pulse" above |
 | Nudging a row does nothing but the row was red/"muted" | Expected — the first nudge only unmutes it (matches Windows' mixer feel) | Nudge again to actually change volume, or press `M` to unmute without changing volume |
+| Profile hotkey shows "not found" | The bound profile name was renamed/deleted since the binding was saved (no save-time validation, by design) | Rebind the hotkey to the current profile name in Settings → Hotkeys; the stale binding stays listed with its old name until you edit or remove it |
+| Profile hotkey shows "already active" and nothing happens | Expected — pressing the hotkey for the currently active profile is a deliberate no-op (no history row, no re-assert) | Switch to a different profile first if you meant to force a re-assert |
 
 ## References
 - [Architecture.md](../Architecture.md) — threads table, event flow, gotchas
