@@ -169,6 +169,107 @@ def heal_stale_ids(entries, devices) -> bool:
     return changed
 
 
+# --------------------------------------------------------------------------
+# Event history — notable events only (v1.9). NEVER record per-enforcement-
+# pass noise (volume restores, mute re-asserts, watchdog passes): Bristopher
+# explicitly excluded them (spec 2026-07-17-event-history-design.md).
+# --------------------------------------------------------------------------
+
+HISTORY_PATH = os.path.join(CONFIG_DIR, "history.json")
+HISTORY_CAP = 500          # entries kept on disk / in memory
+HISTORY_COALESCE_S = 600   # identical consecutive events within 10 min → ×N
+HISTORY_FLUSH_S = 5.0      # debounce before writing the file
+
+
+def history_push(entries, kind, text, now,
+                 cap=HISTORY_CAP, window=HISTORY_COALESCE_S):
+    """Append an event or coalesce it into the newest entry (same kind+text
+    within `window` seconds → bump ×N, refresh ts). Newest is LAST. Trims
+    oldest past `cap`. Pure: mutates and returns `entries`, no I/O."""
+    if entries:
+        last = entries[-1]
+        if (last.get("kind") == kind and last.get("text") == text
+                and now - float(last.get("ts", 0)) <= window):
+            last["n"] = int(last.get("n", 1)) + 1
+            last["ts"] = now
+            return entries
+    entries.append({"ts": now, "kind": kind, "text": text, "n": 1})
+    del entries[:-cap]
+    return entries
+
+
+class HistoryRecorder:
+    """Thread-safe, debounced-persistent event history. Every public method
+    swallows its own failures (Rule 5) — history must never hurt the tray.
+    Callers: Enforcer thread, webview worker threads, tray thread."""
+
+    def __init__(self, path=HISTORY_PATH):
+        self.path = path
+        self._lock = threading.Lock()
+        self._timer = None
+        self._warned = False
+        self.entries = self._load()
+
+    def _load(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, list):
+                return []
+            good = [e for e in raw
+                    if isinstance(e, dict)
+                    and isinstance(e.get("ts"), (int, float))
+                    and isinstance(e.get("kind"), str)
+                    and isinstance(e.get("text"), str)]
+            return good[-HISTORY_CAP:]
+        except FileNotFoundError:
+            return []
+        except Exception as e:
+            log.warning("history load failed (%s) — starting empty", e)
+            return []
+
+    def add(self, kind, text):
+        try:
+            with self._lock:
+                history_push(self.entries, kind, str(text), time.time())
+                if self._timer is None:
+                    self._timer = threading.Timer(HISTORY_FLUSH_S, self.flush)
+                    self._timer.daemon = True
+                    self._timer.start()
+        except Exception as e:
+            log.warning("history add failed: %s", e)
+
+    def flush(self):
+        try:
+            with self._lock:
+                if self._timer is not None:
+                    self._timer.cancel()
+                    self._timer = None
+                data = json.dumps(self.entries)
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(data)
+        except Exception as e:
+            if not self._warned:   # warn once, not per storm
+                self._warned = True
+                log.warning("history save failed (in-memory only): %s", e)
+
+    def clear(self):
+        try:
+            with self._lock:
+                self.entries = []
+            self.flush()
+        except Exception as e:
+            log.warning("history clear failed: %s", e)
+
+    def snapshot(self, n=100):
+        """Last `n` events as copies, NEWEST FIRST — the UI payload."""
+        try:
+            with self._lock:
+                return [dict(e) for e in reversed(self.entries[-n:])]
+        except Exception:
+            return []
+
+
 def get_default_endpoint_id(flow: int, role) -> str | None:
     enumerator = AudioUtilities.GetDeviceEnumerator()
     try:

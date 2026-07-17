@@ -1,5 +1,8 @@
 """Unit tests for micguard's pure logic. Run: uv run pytest -q
 No COM, no hardware — everything here is plain-function testable."""
+import json
+import os
+import tempfile
 import unittest
 
 import micguard as m
@@ -403,6 +406,111 @@ class TestMicEqCore(unittest.TestCase):
     def test_include_line_no_trailing_newline_source(self):
         out = m.ensure_include_line("Preamp: -3 dB")
         self.assertIn("Preamp: -3 dB\n", out)
+
+
+class TestHistoryPush(unittest.TestCase):
+    def test_appends_new_event(self):
+        entries = []
+        m.history_push(entries, "fallback", "Mic switched: A → B", 1000.0)
+        self.assertEqual(entries, [
+            {"ts": 1000.0, "kind": "fallback", "text": "Mic switched: A → B", "n": 1}])
+
+    def test_coalesces_same_kind_text_within_window(self):
+        entries = [{"ts": 1000.0, "kind": "reassert", "text": "x", "n": 1}]
+        m.history_push(entries, "reassert", "x", 1300.0)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["n"], 2)
+        self.assertEqual(entries[0]["ts"], 1300.0)  # ts refreshed to latest
+
+    def test_window_edge_inclusive_then_exclusive(self):
+        entries = [{"ts": 1000.0, "kind": "reassert", "text": "x", "n": 1}]
+        m.history_push(entries, "reassert", "x", 1600.0)   # exactly 600 s → coalesce
+        self.assertEqual(len(entries), 1)
+        m.history_push(entries, "reassert", "x", 2200.1)   # > 600 s later → new row
+        self.assertEqual(len(entries), 2)
+
+    def test_different_text_or_kind_never_coalesces(self):
+        entries = [{"ts": 1000.0, "kind": "reassert", "text": "x", "n": 1}]
+        m.history_push(entries, "reassert", "y", 1001.0)
+        m.history_push(entries, "fallback", "y", 1002.0)
+        self.assertEqual(len(entries), 3)
+
+    def test_only_newest_entry_coalesces(self):
+        entries = [{"ts": 1000.0, "kind": "reassert", "text": "x", "n": 1},
+                   {"ts": 1001.0, "kind": "profile", "text": "p", "n": 1}]
+        m.history_push(entries, "reassert", "x", 1002.0)   # newest is "p", no match
+        self.assertEqual(len(entries), 3)
+
+    def test_trims_to_cap_dropping_oldest(self):
+        entries = [{"ts": float(i), "kind": "k", "text": str(i), "n": 1}
+                   for i in range(500)]
+        m.history_push(entries, "k", "new", 9999.0)
+        self.assertEqual(len(entries), 500)
+        self.assertEqual(entries[0]["text"], "1")      # oldest ("0") dropped
+        self.assertEqual(entries[-1]["text"], "new")   # newest last
+
+
+class TestHistoryRecorder(unittest.TestCase):
+    def _rec(self, tmp):
+        return m.HistoryRecorder(path=os.path.join(tmp, "history.json"))
+
+    def test_add_flush_reload_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._rec(tmp)
+            r.add("start", "MicGuard v9.9.9 started")
+            r.flush()
+            r2 = self._rec(tmp)
+            self.assertEqual(len(r2.entries), 1)
+            self.assertEqual(r2.entries[0]["kind"], "start")
+
+    def test_missing_file_starts_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._rec(tmp).entries, [])
+
+    def test_corrupt_file_starts_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "history.json")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("{not json")
+            self.assertEqual(m.HistoryRecorder(path=p).entries, [])
+
+    def test_invalid_shape_entries_dropped_on_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "history.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump([{"ts": 1.0, "kind": "start", "text": "ok", "n": 1},
+                           "junk", {"no": "fields"}, 42], f)
+            r = m.HistoryRecorder(path=p)
+            self.assertEqual(len(r.entries), 1)
+            self.assertEqual(r.entries[0]["text"], "ok")
+
+    def test_snapshot_newest_first_capped_and_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._rec(tmp)
+            for i in range(150):
+                # distinct text so nothing coalesces
+                r.add("k", f"event {i}")
+            snap = r.snapshot(100)
+            self.assertEqual(len(snap), 100)
+            self.assertEqual(snap[0]["text"], "event 149")   # newest first
+            snap[0]["text"] = "mutated"
+            self.assertEqual(r.entries[-1]["text"], "event 149")  # copy, not ref
+
+    def test_clear_empties_memory_and_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._rec(tmp)
+            r.add("k", "x")
+            r.clear()
+            self.assertEqual(r.entries, [])
+            r2 = self._rec(tmp)
+            self.assertEqual(r2.entries, [])
+
+    def test_add_never_raises_when_dir_unwritable(self):
+        # flush to an impossible path must degrade, not raise
+        r = m.HistoryRecorder(path=os.path.join("Z:\\", "no", "such", "dir", "h.json"))
+        r.add("k", "x")
+        r.flush()   # must not raise
+        self.assertEqual(len(r.entries), 1)
 
 
 class TestMicEqWriter(unittest.TestCase):
