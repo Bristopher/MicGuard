@@ -591,6 +591,9 @@ session can.
    binding's target to `Next profile (cycle)` or any `Profile: <name>` entry
    — confirm the step input shows `—` and is disabled/non-editable, same as
    the `mixer` target.
+7. **Known niggle to judge.** Switching profiles by hotkey while the Settings
+   window is open gets reverted by a later Save (save writes back the viewed
+   profile as active) — decide if that needs fixing.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

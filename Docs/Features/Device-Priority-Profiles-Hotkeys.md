@@ -297,6 +297,23 @@ triggered it (see the Notable-event history row in
 `active_profile`, records the history row, clears the enforcer's
 once-done flag, `reattach()`/`poke()`s enforcement, and re-applies Mic EQ.
 
+**A profile switch never fires the fallback machinery (final-review fix,
+2026-07-17).** The `reattach()`/`poke()` above wakes the Enforcer, whose next
+pass sees the previously-enforced device differ from the newly-picked one —
+structurally the same shape as a real device-loss fallback. `Enforcer._enforce`
+now tracks `_last_profile` and computes `profile_changed` before each pass; when
+it's `True`, `_enforce_flow` skips `on_fallback` (no popup, no extra `fallback`/
+`recover` history row) in both the "device vanished" and "device changed"
+branches, while still re-targeting Mic EQ for the capture flow exactly as
+`notify_fallback` would have. The hotkey's own `switched`/`already
+active`/`not found` OSD note plus the single `history.add("profile", ...)` row
+from `set_profile` remain the only feedback for a deliberate switch — including
+switching TO a profile with no mic currently connected, which no longer shows
+a "Mic disconnected" warning popup. Tray-menu switches go through the same
+`set_profile` path and get the same suppression. Genuine availability
+fallbacks (no profile change in flight) are unaffected — popup + history row
+fire exactly as before.
+
 **`HotkeyManager._fire` routing for `profile:` targets** (mirrors the design
 spec exactly):
 - Resolves to `None` (not found — includes a stale/deleted profile name) →
@@ -329,8 +346,12 @@ anyway), a `profile:<name>` binding is NOT checked against the current
 deleted, the binding is left exactly as-is — it becomes a stale reference
 that `resolve_profile_target` will legitimately resolve to `None` the next
 time the hotkey fires, producing the "not found" OSD note rather than a
-silently-dropped or auto-rewritten binding. This keeps save-time logic simple
-and matches the spec's explicit call: guard at fire time, not save time.
+silently-dropped or auto-rewritten binding. This keeps save-time logic simple.
+It's a deliberate deviation from the spec, which called for save-time
+validation: the dropdown already constrains ordinary edits to real profile
+names, and the fire-time guard (`resolve_profile_target` → `None` → "not
+found" OSD) covers every other case totally, so the extra save-time check
+was judged not worth the complexity.
 
 **Settings dropdown.** The hotkey target `<select>` now offers `'Next profile
 (cycle)'` (value `profile:next`) plus one `'Profile: <name>'` option per

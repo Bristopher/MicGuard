@@ -84,6 +84,9 @@ for target-form details. `profile:*` and `mixer` bindings always save with
 `step: 0`; `profile:<name>` is deliberately NOT checked against the current
 `profiles` list at save time — a stale name is guarded at fire time instead
 (`resolve_profile_target` returns `None`, the hotkey shows a "not found" OSD).
+This deviates from the spec's save-time validation line; it's a deliberate
+call — the dropdown already constrains ordinary input to real profile names,
+and the fire-time guard covers renames/deletions totally.
 
 As of v1.8, each profile dict also carries a `mic_eq` key (v1.8, Mic EQ
 extension — see [Features/Mic-EQ-Extension.md](Features/Mic-EQ-Extension.md)):

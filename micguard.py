@@ -1073,6 +1073,7 @@ class HotkeyManager(threading.Thread):
             if target.startswith("profile:"):
                 name = resolve_profile_target(target, self.app.cfg)
                 if name is None:
+                    log.warning("profile hotkey: %r not found", target)
                     self.app.show_osd(f"Profile: {target[8:] or '?'}",
                                       None, note="not found")
                 elif name == self.app.cfg.get("active_profile"):
@@ -1963,7 +1964,7 @@ function hkTargetLabel(o){
 }
 function hkRowHtml(b, i){
   const opts = ['system', 'active', 'mixer', 'profile:next',
-    ...S.profiles.map(p => 'profile:' + p),
+    ...S.profiles.filter(p => p !== 'next').map(p => 'profile:' + p),
     ...S.sessions.map(x => 'app:' + x)];
   if (b.target && !opts.includes(b.target)) opts.push(b.target);
   const bad = S.hotkeyFailures && S.hotkeyFailures.includes(b.keys);
@@ -2429,6 +2430,7 @@ class Enforcer(threading.Thread):
         self._volume_cbs = {"capture": None, "render": None}
         self._listener_ids = {"capture": None, "render": None}
         self._set_once_done = set()             # output ids whose one-shot volume was applied
+        self._last_profile = None               # last-seen active_profile; None means "not yet observed"
 
     def stop(self):
         self._stop_evt.set()
@@ -2490,14 +2492,20 @@ class Enforcer(threading.Thread):
         if not cfg.get("enforce"):
             return
         mics, outputs = active_profile_lists(cfg)
+        cfg_profile = cfg.get("active_profile")
+        # NOTE: the `is not None` guard means the FIRST pass after startup
+        # always counts as profile_changed=False — first-pass suppression is
+        # already handled by the existing prev-is-None checks in _enforce_flow.
+        profile_changed = self._last_profile is not None and cfg_profile != self._last_profile
+        self._last_profile = cfg_profile
         for (key, flow), entries in zip(FLOWS, (mics, outputs)):
             try:
-                self._enforce_flow(key, flow, entries)
+                self._enforce_flow(key, flow, entries, profile_changed)
             except Exception as e:
                 log.warning("enforce pass (%s) failed: %s", key, e)
                 self._volume_coms[key] = None   # watchdog retries
 
-    def _enforce_flow(self, key, flow, entries):
+    def _enforce_flow(self, key, flow, entries, profile_changed=False):
         if not entries:
             self.enforced[key] = None
             return
@@ -2516,12 +2524,26 @@ class Enforcer(threading.Thread):
         prev = self.enforced[key]
         if want is None:
             if prev is not None and self.on_fallback:
-                self.on_fallback(key, prev.get("name"), None)
+                if profile_changed:
+                    # deliberate profile switch, not a real fallback — no
+                    # alert/history row, but still retarget mic EQ the way
+                    # notify_fallback would have (now_entry=None case)
+                    if key == "capture":
+                        self.app._apply_mic_eq(enforced_override=None)
+                else:
+                    self.on_fallback(key, prev.get("name"), None)
             self.enforced[key] = None
             return
         # availability-driven change (not first pass) -> alert
         if prev is not None and prev.get("id") != want.get("id") and self.on_fallback:
-            self.on_fallback(key, prev.get("name"), want)
+            if profile_changed:
+                # deliberate profile switch — suppress the fallback alert
+                # and history row, but keep the EQ retarget notify_fallback
+                # would have done for the capture flow
+                if key == "capture":
+                    self.app._apply_mic_eq(enforced_override=want)
+            else:
+                self.on_fallback(key, prev.get("name"), want)
         # only record a "reassert" history row when the wanted device is
         # unchanged from the previous pass — otherwise this double-records
         # fallbacks/profile switches (which already log their own row) and
