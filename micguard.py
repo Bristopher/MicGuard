@@ -181,17 +181,27 @@ HISTORY_COALESCE_S = 600   # identical consecutive events within 10 min → ×N
 HISTORY_FLUSH_S = 5.0      # debounce before writing the file
 
 
+HISTORY_COALESCE_LOOKBACK = 8  # scan at most this many trailing entries
+
 def history_push(entries, kind, text, now,
                  cap=HISTORY_CAP, window=HISTORY_COALESCE_S):
-    """Append an event or coalesce it into the newest entry (same kind+text
-    within `window` seconds → bump ×N, refresh ts). Newest is LAST. Trims
-    oldest past `cap`. Pure: mutates and returns `entries`, no I/O."""
-    if entries:
-        last = entries[-1]
-        if (last.get("kind") == kind and last.get("text") == text
-                and now - float(last.get("ts", 0)) <= window):
-            last["n"] = int(last.get("n", 1)) + 1
-            last["ts"] = now
+    """Append an event, or coalesce it into a recent matching entry (same
+    kind+text within `window` seconds). Scans the last
+    `HISTORY_COALESCE_LOOKBACK` entries newest→oldest (not just entries[-1])
+    so alternating event kinds/texts (e.g. capture/render reassert rows
+    interleaving) still coalesce instead of each filling a fresh row. The
+    matched entry is bumped (×N, ts refreshed) and MOVED to the end so it
+    stays newest. Newest is LAST. Trims oldest past `cap`. Pure: mutates and
+    returns `entries`, no I/O."""
+    lookback = min(len(entries), HISTORY_COALESCE_LOOKBACK)
+    for idx in range(len(entries) - 1, len(entries) - 1 - lookback, -1):
+        cand = entries[idx]
+        if (cand.get("kind") == kind and cand.get("text") == text
+                and now - float(cand.get("ts", 0)) <= window):
+            cand["n"] = int(cand.get("n", 1)) + 1
+            cand["ts"] = now
+            del entries[idx]
+            entries.append(cand)
             return entries
     entries.append({"ts": now, "kind": kind, "text": text, "n": 1})
     del entries[:-cap]
@@ -246,8 +256,8 @@ class HistoryRecorder:
                     self._timer.cancel()
                     self._timer = None
                 data = json.dumps(self.entries)
-            with open(self.path, "w", encoding="utf-8") as f:
-                f.write(data)
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.write(data)
         except Exception as e:
             if not self._warned:   # warn once, not per storm
                 self._warned = True
@@ -257,7 +267,11 @@ class HistoryRecorder:
         try:
             with self._lock:
                 self.entries = []
-            self.flush()
+                if self._timer is not None:
+                    self._timer.cancel()
+                    self._timer = None
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(self.entries))
         except Exception as e:
             log.warning("history clear failed: %s", e)
 
@@ -2100,6 +2114,8 @@ async function save(){
   if (r && r.micEqError){ S.micEq.error = r.micEqError; }
   else if (S && S.micEq) { S.micEq.error = ''; }
   paintEq();   // surface a write failure (e.g. unwritable config dir) on the card
+  S.history = r.history || S.history;
+  renderHistory();
   showSaved(r);
 }
 </script></body></html>"""
@@ -2460,16 +2476,22 @@ class Enforcer(threading.Thread):
         # availability-driven change (not first pass) -> alert
         if prev is not None and prev.get("id") != want.get("id") and self.on_fallback:
             self.on_fallback(key, prev.get("name"), want)
+        # only record a "reassert" history row when the wanted device is
+        # unchanged from the previous pass — otherwise this double-records
+        # fallbacks/profile switches (which already log their own row) and
+        # fires spuriously on first-pass startup (prev is None)
+        same_want = prev is not None and prev.get("id") == want.get("id")
         self.enforced[key] = want
         for role in (ERole.eMultimedia, ERole.eCommunications, ERole.eConsole):
             if get_default_endpoint_id(flow, role) != want["id"]:
                 log.info("%s default drifted (role %s) — restoring %s",
                          key, role.name, want.get("name"))
                 set_default_endpoint(want["id"])
-                self.app.history.add(
-                    "reassert",
-                    f"{'Mic' if key == 'capture' else 'Output'} default "
-                    f"re-asserted — {want.get('name') or want['id']}")
+                if same_want:
+                    self.app.history.add(
+                        "reassert",
+                        f"{'Mic' if key == 'capture' else 'Output'} default "
+                        f"re-asserted — {want.get('name') or want['id']}")
                 break
         hold = key == "capture" or want.get("hold_volume")
         if key == "capture" and self.hold_volume:
@@ -3076,7 +3098,8 @@ class App:
                 # green "Saved" confirmation; report unregistrable combos
                 return {"ok": True,
                         "hotkeyFailures": app._hotkey_failures(wait=2.0),
-                        "micEqError": getattr(app, "_eq_error", "")}
+                        "micEqError": getattr(app, "_eq_error", ""),
+                        "history": app.history.snapshot(100)}
 
             def open_github(self_api):
                 webbrowser.open(f"https://github.com/{GITHUB_REPO}")

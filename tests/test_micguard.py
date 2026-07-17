@@ -436,10 +436,50 @@ class TestHistoryPush(unittest.TestCase):
         self.assertEqual(len(entries), 3)
 
     def test_only_newest_entry_coalesces(self):
+        # NOTE: this pins the NEW bounded-lookback semantics (superseding the
+        # old "only entries[-1] can coalesce" rule) — a same-kind+text match
+        # within the lookback window (here entries[-2]) DOES coalesce now,
+        # moving to the end instead of appending a third row.
         entries = [{"ts": 1000.0, "kind": "reassert", "text": "x", "n": 1},
                    {"ts": 1001.0, "kind": "profile", "text": "p", "n": 1}]
-        m.history_push(entries, "reassert", "x", 1002.0)   # newest is "p", no match
-        self.assertEqual(len(entries), 3)
+        m.history_push(entries, "reassert", "x", 1002.0)   # matches entries[-2]
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[-1],
+                          {"ts": 1002.0, "kind": "reassert", "text": "x", "n": 2})
+        self.assertEqual(entries[0]["text"], "p")
+
+    def test_alternating_events_coalesce_within_lookback(self):
+        entries = []
+        m.history_push(entries, "reassert", "A", 1000.0)
+        m.history_push(entries, "reassert", "B", 1001.0)
+        m.history_push(entries, "reassert", "A", 1002.0)
+        m.history_push(entries, "reassert", "B", 1003.0)
+        self.assertEqual(len(entries), 2)
+        by_text = {e["text"]: e for e in entries}
+        self.assertEqual(by_text["A"]["n"], 2)
+        self.assertEqual(by_text["B"]["n"], 2)
+
+    def test_match_beyond_lookback_bound_not_coalesced(self):
+        entries = []
+        # push 9 distinct entries, then repeat the first text — it's now
+        # 9 entries back, outside HISTORY_COALESCE_LOOKBACK (8)
+        for i in range(9):
+            m.history_push(entries, "reassert", f"t{i}", 1000.0 + i)
+        m.history_push(entries, "reassert", "t0", 1100.0)
+        self.assertEqual(len(entries), 10)   # no coalesce — new row appended
+        self.assertEqual(entries[-1]["text"], "t0")
+        self.assertEqual(entries[-1]["n"], 1)
+
+    def test_coalesced_entry_moves_to_end(self):
+        entries = [{"ts": 1000.0, "kind": "reassert", "text": "x", "n": 1},
+                   {"ts": 1001.0, "kind": "profile", "text": "p", "n": 1},
+                   {"ts": 1002.0, "kind": "start", "text": "s", "n": 1}]
+        m.history_push(entries, "reassert", "x", 1003.0)
+        self.assertIs(entries[-1], entries[-1])  # sanity
+        self.assertEqual(entries[-1]["kind"], "reassert")
+        self.assertEqual(entries[-1]["text"], "x")
+        self.assertEqual(entries[-1]["n"], 2)
+        self.assertEqual([e["text"] for e in entries], ["p", "s", "x"])
 
     def test_trims_to_cap_dropping_oldest(self):
         entries = [{"ts": float(i), "kind": "k", "text": str(i), "n": 1}
