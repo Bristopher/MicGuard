@@ -1324,6 +1324,32 @@ def active_profile_lists(cfg: dict):
     return prof.get("mics", []), prof.get("outputs", [])
 
 
+def next_profile(cfg) -> str:
+    """The profile after `active_profile` in `profiles` order, wrapping.
+    Unknown active -> the first profile; no profiles -> "". Pure."""
+    names = [p.get("name") for p in cfg.get("profiles", []) if p.get("name")]
+    if not names:
+        return ""
+    active = cfg.get("active_profile")
+    if active not in names:
+        return names[0]
+    return names[(names.index(active) + 1) % len(names)]
+
+
+def resolve_profile_target(target, cfg):
+    """Map a hotkey target to a profile name: 'profile:next' -> the cycle
+    successor ('next' is reserved even if a profile carries that name);
+    'profile:<name>' -> <name> iff it exists. Anything else -> None. Pure."""
+    if not isinstance(target, str) or not target.startswith("profile:"):
+        return None
+    name = target[8:]
+    if name == "next":
+        return next_profile(cfg) or None
+    if any(p.get("name") == name for p in cfg.get("profiles", [])):
+        return name
+    return None
+
+
 def launch_command() -> str:
     if IS_FROZEN:
         return f'"{sys.executable}"'

@@ -799,3 +799,52 @@ class TestMixerKeyActionWasd(unittest.TestCase):
                           (117, 0, 0x53), (118, 0, 0x44)])
         self.assertTrue(all(hid > max(h for h, _, _ in m.MIXER_KEYS)
                             for hid, _, _ in m.MIXER_WASD_KEYS))
+
+
+class TestNextProfile(unittest.TestCase):
+    def _cfg(self, names, active):
+        return {"profiles": [{"name": n} for n in names],
+                "active_profile": active}
+
+    def test_two_profiles_cycles_forward(self):
+        self.assertEqual(m.next_profile(self._cfg(["A", "B"], "A")), "B")
+
+    def test_wraps_from_last_to_first(self):
+        self.assertEqual(m.next_profile(self._cfg(["A", "B", "C"], "C")), "A")
+
+    def test_single_profile_returns_itself(self):
+        self.assertEqual(m.next_profile(self._cfg(["Only"], "Only")), "Only")
+
+    def test_unknown_active_falls_back_to_first(self):
+        self.assertEqual(m.next_profile(self._cfg(["A", "B"], "Ghost")), "A")
+
+    def test_no_profiles_returns_empty(self):
+        self.assertEqual(m.next_profile({"profiles": [], "active_profile": "x"}), "")
+
+
+class TestResolveProfileTarget(unittest.TestCase):
+    CFG = {"profiles": [{"name": "Default"}, {"name": "Calls"}],
+           "active_profile": "Default"}
+
+    def test_next_resolves_to_cycle(self):
+        self.assertEqual(m.resolve_profile_target("profile:next", self.CFG), "Calls")
+
+    def test_named_existing_profile(self):
+        self.assertEqual(m.resolve_profile_target("profile:Calls", self.CFG), "Calls")
+
+    def test_named_missing_profile_is_none(self):
+        self.assertIsNone(m.resolve_profile_target("profile:Gone", self.CFG))
+
+    def test_bare_prefix_is_none(self):
+        self.assertIsNone(m.resolve_profile_target("profile:", self.CFG))
+
+    def test_non_profile_targets_are_none(self):
+        for t in ("system", "mixer", "app:discord.exe", "", None, 42):
+            self.assertIsNone(m.resolve_profile_target(t, self.CFG))
+
+    def test_profile_literally_named_next_is_shadowed_by_cycle(self):
+        # "next" is reserved: profile:next always cycles, even if a profile
+        # is named "next" — document-by-test
+        cfg = {"profiles": [{"name": "next"}, {"name": "B"}],
+               "active_profile": "next"}
+        self.assertEqual(m.resolve_profile_target("profile:next", cfg), "B")
