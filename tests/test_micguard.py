@@ -848,3 +848,7 @@ class TestResolveProfileTarget(unittest.TestCase):
         cfg = {"profiles": [{"name": "next"}, {"name": "B"}],
                "active_profile": "next"}
         self.assertEqual(m.resolve_profile_target("profile:next", cfg), "B")
+
+    def test_empty_named_profile_never_resolves(self):
+        cfg = {"profiles": [{"name": ""}, {"name": "B"}], "active_profile": "B"}
+        self.assertIsNone(m.resolve_profile_target("profile:", cfg))

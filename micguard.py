@@ -1070,6 +1070,18 @@ class HotkeyManager(threading.Thread):
             if target == "mixer":
                 self.app.toggle_mixer()   # Task 5 implements; Task 3 adds a stub
                 return
+            if target.startswith("profile:"):
+                name = resolve_profile_target(target, self.app.cfg)
+                if name is None:
+                    self.app.show_osd(f"Profile: {target[8:] or '?'}",
+                                      None, note="not found")
+                elif name == self.app.cfg.get("active_profile"):
+                    self.app.show_osd(f"Profile: {name}",
+                                      None, note="already active")
+                else:
+                    self.app.set_profile(name)
+                    self.app.show_osd(f"Profile: {name}", None, note="switched")
+                return
             if target == "active":
                 exe = get_foreground_exe()
                 if not exe:
@@ -1345,7 +1357,7 @@ def resolve_profile_target(target, cfg):
     name = target[8:]
     if name == "next":
         return next_profile(cfg) or None
-    if any(p.get("name") == name for p in cfg.get("profiles", [])):
+    if name and any(p.get("name") == name for p in cfg.get("profiles", [])):
         return name
     return None
 
@@ -2269,10 +2281,14 @@ body{color:#fafafa;border:1px solid #27272a;border-radius:0;padding:12px 16px;
 <div class="row"><span id="label"></span><span class="pct" id="pct"></span></div>
 <div class="bar"><div id="fill"></div></div>
 <script>
-function setOsd(label, pct){
+function setOsd(label, pct, note){
   document.getElementById('label').textContent = label;
   var pctEl = document.getElementById('pct'), fill = document.getElementById('fill');
-  if (pct === null){
+  if (note != null){
+    pctEl.textContent = note;
+    pctEl.classList.add('dim');
+    fill.style.width = '0%';
+  } else if (pct === null){
     pctEl.textContent = 'no audio';
     pctEl.classList.add('dim');
     fill.style.width = '0%';
@@ -3084,7 +3100,8 @@ class App:
                         step = int(b.get("step", 2))
                     except (TypeError, ValueError):
                         step = 2
-                    step = 0 if target == "mixer" else (max(-10, min(10, step)) or 2)
+                    step = (0 if target == "mixer" or target.startswith("profile:")
+                            else (max(-10, min(10, step)) or 2))
                     bindings.append({"keys": keys,
                                      "target": target,
                                      "step": step})
@@ -3173,6 +3190,21 @@ class App:
                                     (screen.height - SET_H) // 2)
         except Exception:
             pass
+
+    def set_profile(self, name) -> bool:
+        """Activate a named profile — the ONE switch path (tray menu and
+        profile hotkeys both land here), so each switch records exactly one
+        history row. Returns False for an unknown name (no-op)."""
+        if not any(p["name"] == name for p in self.cfg["profiles"]):
+            return False
+        self.cfg["active_profile"] = name
+        save_config(self.cfg)
+        self.history.add("profile", f"Profile switched to {name}")
+        self.enforcer._set_once_done.clear()
+        self.enforcer.reattach()
+        self.enforcer.poke()
+        self._apply_mic_eq()
+        return True
 
     def open_settings(self):
         if self._settings_win is None:
@@ -3303,14 +3335,7 @@ class App:
                     pass
 
             def set_profile(self_api, name):
-                if any(p["name"] == name for p in app.cfg["profiles"]):
-                    app.cfg["active_profile"] = name
-                    save_config(app.cfg)
-                    app.history.add("profile", f"Profile switched to {name}")
-                    app.enforcer._set_once_done.clear()
-                    app.enforcer.reattach()
-                    app.enforcer.poke()
-                    app._apply_mic_eq()
+                app.set_profile(name)
                 try:
                     app._menu_win.evaluate_js("refreshMenu()")
                 except Exception:
@@ -3672,7 +3697,7 @@ class App:
             self._fse_probe_live = False
             raise
 
-    def show_osd(self, label, percent):
+    def show_osd(self, label, percent, note=None):
         """Volume OSD, bottom-center, no focus steal. Called from the
         HotkeyManager thread — never raises (a broken OSD must not take the
         hotkeys down with it)."""
@@ -3689,7 +3714,7 @@ class App:
                 self._prime_osd_window()
             pct_js = "null" if percent is None else int(percent)
             self._osd_win.evaluate_js(
-                f"setOsd({json.dumps(str(label))}, {pct_js})")
+                f"setOsd({json.dumps(str(label))}, {pct_js}, {json.dumps(note)})")
             if self._osd_h is None:
                 # Frameless windows are created smaller than requested AND
                 # floored by min_size, so the real rect never matches OSD_H —
