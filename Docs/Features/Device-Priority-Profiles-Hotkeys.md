@@ -32,16 +32,20 @@ In one sentence: `Enforcer._enforce()` now loops over `(capture, render)`
 flows, calls the pure `pick_device(entries, active_ids)` to choose the
 highest-priority CONNECTED device in each flow's active-profile list, asserts
 it as the default endpoint via the same `IPolicyConfig` call as v1.4, and
-enforces volume (mics always held; outputs held only if their `hold_volume`
-flag is set, else set once at switch time).
+enforces volume (v1.10: BOTH flows hold only if the entry's `hold_volume`
+flag is set, else set once at switch time — see the v1.10 note below).
 
 ## Features
 
 ### Implemented
 - ✅ Ordered priority/fallback lists for BOTH capture and render devices,
-  each entry carrying its own volume (mics always held; per-output
-  `hold_volume` toggle — off lets the system volume keys work normally on
-  that output)
+  each entry carrying its own volume and (v1.10) its own `hold_volume`
+  checkbox on mics AND outputs — off sets the volume once at switch time
+  and then leaves it alone. Mic hold semantics: pre-1.10 configs are
+  stamped `hold_volume: True` by `migrate_config` (mics used to be held
+  unconditionally — an update must never silently stop holding), while a
+  FRESH install's auto-detected mic starts with hold OFF so the user opts
+  in; the unmute re-assert rides the hold flag too.
 - ✅ Auto-switch-back: the highest-priority connected device always wins,
   immediately, when it reconnects
 - ✅ Named profiles bundling both lists; switch from the tray menu (dynamic

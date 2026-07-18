@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-18 — §16 added: tray tooltip + Add/Remove Programs entry (v1.9)
+**Updated:** 2026-07-18 — §17 added: mic volume-hold toggle + one-click update button (v1.10)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -615,6 +615,27 @@ values above; sabotage smoke restored to 85 (AT2020 back online).
    the Installed Apps entry + `%APPDATA%\MicGuard` + the exe. (Reinstall via
    `install-test.ps1` afterward.) Fine to defer this one until you'd next
    reinstall anyway.
+
+## 17. Mic volume-hold toggle + one-click update button (v1.10, ~5 min)
+
+**Shipped:** 2026-07-18 (the commit after `28a911d`), test-built as 1.10.0.
+**Machine-verified:** 123 pytest (migrate stamps `hold_volume: True` onto
+pre-1.10 mic entries, explicit False preserved, outputs untouched); sabotage
+smoke on the installed 1.10.0 restored to 85 — i.e. YOUR migrated config still
+holds volume with no action needed.
+
+1. **Mic hold checkbox.** Settings → Microphones: each mic row now has the
+   same small "hold volume" checkbox outputs have — yours should already be
+   CHECKED (migrated). Uncheck it + Save → the sabotage test should NOT
+   restore (volume stays where you drag it, device is still enforced as
+   default). Re-check + Save → sub-second restore again.
+2. **Fresh-install default.** (Only if you ever wipe `%APPDATA%\MicGuard`:)
+   first run auto-adds your mic with hold UNCHECKED — the user opts in.
+3. **Update button.** Settings → "check now": with no update it should say
+   "Up to date (v1.10.0)". When the next release exists, it should say
+   "v1.10.0 → vX.Y.Z available" with an **Update & restart** button — one
+   click downloads, swaps the exe, and relaunches, no extra dialog. (Fully
+   testable at the next release; the tray-menu check keeps the old dialog.)
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

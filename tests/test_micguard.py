@@ -15,8 +15,10 @@ class TestMigrateConfig(unittest.TestCase):
         cfg = m.migrate_config(dict(raw))
         self.assertEqual(cfg["active_profile"], "Default")
         self.assertEqual(cfg["profiles"][0]["name"], "Default")
+        # v1 installs always held the mic volume -> migrated entries keep that
         self.assertEqual(cfg["profiles"][0]["mics"],
-                         [{"id": "{id-1}", "name": "AT2020", "volume": 85}])
+                         [{"id": "{id-1}", "name": "AT2020", "volume": 85,
+                           "hold_volume": True}])
         self.assertEqual(cfg["profiles"][0]["outputs"], [])
         for dead in ("device_id", "device_name", "volume"):
             self.assertNotIn(dead, cfg)
@@ -34,6 +36,28 @@ class TestMigrateConfig(unittest.TestCase):
         raw = {"device_id": "{x}", "device_name": "M", "volume": 50}
         once = m.migrate_config(dict(raw))
         self.assertEqual(m.migrate_config(dict(once)), once)
+
+    def test_pre_110_mics_get_hold_volume_true(self):
+        # pre-1.10 configs had no hold_volume on mics (hold was unconditional)
+        # -> stamp True so updating never silently stops holding the volume
+        v2 = {"profiles": [
+            {"name": "A", "mics": [{"id": "1", "name": "m", "volume": 85}],
+             "outputs": [{"id": "2", "name": "o", "volume": 20}]},
+            {"name": "B", "mics": [{"id": "3", "name": "n", "volume": 50}],
+             "outputs": []}],
+            "active_profile": "A"}
+        cfg = m.migrate_config(v2)
+        self.assertTrue(cfg["profiles"][0]["mics"][0]["hold_volume"])
+        self.assertTrue(cfg["profiles"][1]["mics"][0]["hold_volume"])
+        # outputs keep their own semantics (absent == False) — never stamped
+        self.assertNotIn("hold_volume", cfg["profiles"][0]["outputs"][0])
+
+    def test_explicit_mic_hold_false_is_preserved(self):
+        v2 = {"profiles": [{"name": "A", "outputs": [], "mics": [
+            {"id": "1", "name": "m", "volume": 85, "hold_volume": False}]}],
+            "active_profile": "A"}
+        cfg = m.migrate_config(v2)
+        self.assertFalse(cfg["profiles"][0]["mics"][0]["hold_volume"])
 
 
 class TestActiveProfileLists(unittest.TestCase):

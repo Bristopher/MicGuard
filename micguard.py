@@ -21,7 +21,7 @@ import webbrowser
 import winreg
 
 APP_NAME = "MicGuard"
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 GITHUB_REPO = "Bristopher/MicGuard"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 EQ_SITE_URL = "https://sourceforge.net/projects/equalizerapo/"
@@ -1327,6 +1327,12 @@ def migrate_config(raw: dict) -> dict:
         raw["active_profile"] = "Default"
     for dead in ("device_id", "device_name", "volume"):
         raw.pop(dead, None)
+    # v1.10: mic volume-hold became opt-in. Pre-1.10 configs always held the
+    # mic volume, so stamp True onto entries that predate the key — only FRESH
+    # installs (and newly added rows) start unchecked.
+    for prof in raw.get("profiles", []):
+        for mic in prof.get("mics", []) or []:
+            mic.setdefault("hold_volume", True)
     return raw
 
 
@@ -1687,6 +1693,8 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .chknow{color:#71717a;text-decoration:underline}
 .chknow:hover{color:#fafafa}
 #updmsg{margin-left:6px}
+.updbtn{padding:2px 10px;font-size:11.5px;margin-left:8px;border-radius:6px;
+        vertical-align:middle}
 #savemsg{flex:1;min-width:0;align-self:center;text-align:right;
       font-size:12.5px;font-weight:600;color:#22c55e;
       opacity:0;transition:opacity .3s;white-space:nowrap;overflow:hidden;
@@ -1835,7 +1843,9 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 <div class="switchrow">
   <div><div class="lab">Check for updates on launch</div>
        <div class="hint">Always asks before installing anything &mdash;
-         <a class="chknow" href="javascript:void(0)" onclick="checkUpd()">check now</a><span id="updmsg"></span></div></div>
+         <a class="chknow" href="javascript:void(0)" onclick="checkUpd()">check now</a><span id="updmsg"></span>
+         <button class="btn primary updbtn" id="updbtn" style="display:none"
+           onclick="installUpd()">Update &amp; restart</button></div></div>
   <label class="switch"><input type="checkbox" id="sw_updates"><span class="knob"></span></label>
 </div>
 <div class="switchrow">
@@ -1859,19 +1869,41 @@ const hear = document.getElementById('sw_hear');
 let S = null, recommended = 85, promptMode = null, lastTargetId = null;
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-// manual update check — result shows inline next to the link; a found
-// update takes the normal consent-dialog path (empty string comes back)
+// manual update check — shows the version context inline; a found update
+// reveals the one-click "Update & restart" button (the click IS the consent)
 let updT = null;
 async function checkUpd(){
-  const m = document.getElementById('updmsg');
-  m.style.color = '#a1a1aa'; m.textContent = 'checking…';
-  let r = '';
-  try { r = await pywebview.api.check_updates(); }
-  catch(e){ r = 'Update check failed'; }
-  m.style.color = /failed/i.test(r) ? '#f59e0b' : '#22c55e';
-  m.textContent = r || '';
+  const m = document.getElementById('updmsg'), b = document.getElementById('updbtn');
+  b.style.display = 'none'; b.disabled = false;
   clearTimeout(updT);
-  updT = setTimeout(() => { m.textContent = ''; }, 8000);
+  m.style.color = '#a1a1aa'; m.textContent = 'checking…';
+  let r = null;
+  try { r = await pywebview.api.update_info(); }
+  catch(e){ r = {status: 'error', msg: 'Update check failed'}; }
+  if (r.status === 'update'){
+    m.style.color = '#22c55e';
+    m.textContent = `v${r.current} → v${r.latest} available`;
+    b.style.display = '';
+  } else if (r.status === 'uptodate'){
+    m.style.color = '#22c55e'; m.textContent = `Up to date (v${r.current})`;
+    updT = setTimeout(() => { m.textContent = ''; }, 8000);
+  } else {
+    m.style.color = '#f59e0b'; m.textContent = r.msg || 'Update check failed';
+    updT = setTimeout(() => { m.textContent = ''; }, 8000);
+  }
+}
+async function installUpd(){
+  const m = document.getElementById('updmsg'), b = document.getElementById('updbtn');
+  b.disabled = true;
+  m.style.color = '#a1a1aa'; m.textContent = 'downloading update…';
+  let r = null;
+  try { r = await pywebview.api.install_update(); }
+  catch(e){ r = {ok: false, msg: 'Update failed'}; }
+  if (r && r.ok){ m.style.color = '#22c55e'; m.textContent = 'Restarting…'; }
+  else {
+    m.style.color = '#f59e0b'; m.textContent = (r && r.msg) || 'Update failed';
+    b.disabled = false;
+  }
 }
 function listOf(flow){ return flow === 'out' ? S.outputs : S.mics; }
 // the slider / meter / hear-yourself all target the first CONNECTED mic —
@@ -1922,9 +1954,9 @@ function rowHtml(flow, i, d){
       onclick="moveDev('${flow}',${i},1)">&#9660;</a></span>
     <span class="dname" title="${esc(d.name)}">${i+1}. ${esc(d.name)}${
       d.connected ? '' : ' <span class="dis">(not connected)</span>'}</span>
-    ${isOut ? `<label class="mini" title="Hold volume &mdash; keep enforcing it, not just set once"><input
+    <label class="mini" title="Hold volume &mdash; keep enforcing it, not just set once"><input
       type="checkbox"${d.hold_volume ? ' checked' : ''}
-      onchange="editDev('out',${i},'hold_volume',this.checked)"><span></span></label>` : ''}
+      onchange="editDev('${flow}',${i},'hold_volume',this.checked)"><span></span></label>
     <input class="dvol" value="${d.volume}" inputmode="numeric" maxlength="3"
       oninput="this.value=this.value.replace(/[^0-9]/g,'')"
       onchange="editDev('${flow}',${i},'volume',this.value)"><span class="pctx">%</span>
@@ -1969,8 +2001,7 @@ async function addDev(flow){
   const name = sel.options[sel.selectedIndex].textContent;
   // v1.4 adoption rule: a newly guarded device starts at its CURRENT volume
   const volume = await pywebview.api.device_volume(id);
-  const entry = {id, name, volume, connected: true};
-  if (flow === 'out') entry.hold_volume = false;
+  const entry = {id, name, volume, connected: true, hold_volume: false};
   listOf(flow).push(entry);
   renderList(flow);
 }
@@ -2641,7 +2672,9 @@ class Enforcer(threading.Thread):
                         f"{'Mic' if key == 'capture' else 'Output'} default "
                         f"re-asserted — {want.get('name') or want['id']}")
                 break
-        hold = key == "capture" or want.get("hold_volume")
+        # v1.10: mic hold is opt-in per entry (migrate_config stamps True onto
+        # pre-1.10 configs so updates keep behaving; fresh installs start off)
+        hold = bool(want.get("hold_volume"))
         if key == "capture" and self.hold_volume:
             return                              # hear-yourself preview owns the volume
         self._attach_volume_listener(key, want["id"])
@@ -2684,8 +2717,11 @@ class App:
                     volume = round(vol * 100)
                 except Exception:
                     pass
+                # hold_volume starts OFF on a fresh install — holding the mic
+                # volume is the user's choice to turn on (2026-07-18)
                 self.cfg["profiles"][0]["mics"] = [
-                    {"id": device_id, "name": device_name or "", "volume": volume}]
+                    {"id": device_id, "name": device_name or "", "volume": volume,
+                     "hold_volume": False}]
             save_config(self.cfg)
         self.history = HistoryRecorder()
         self.enforcer = Enforcer(self, on_fallback=self.notify_fallback)
@@ -3175,7 +3211,7 @@ class App:
                 prof = next((p for p in profiles
                              if p.get("name") == state.get("active")), profiles[0])
 
-                def clean(entries, is_output):
+                def clean(entries):
                     out = []
                     for e in entries or []:
                         if not e.get("id"):
@@ -3185,16 +3221,18 @@ class App:
                                                               RECOMMENDED_VOLUME))))
                         except (TypeError, ValueError):
                             volume = RECOMMENDED_VOLUME
+                        # hold_volume is explicit on every saved entry (v1.10:
+                        # mics have the checkbox too), so migrate_config's
+                        # stamp-True only ever touches pre-1.10 entries
                         item = {"id": str(e["id"]),
                                 "name": str(e.get("name") or ""),
-                                "volume": volume}
-                        if is_output:
-                            item["hold_volume"] = bool(e.get("hold_volume"))
+                                "volume": volume,
+                                "hold_volume": bool(e.get("hold_volume"))}
                         out.append(item)  # transient `connected` key dropped
                     return out
 
-                prof["mics"] = clean(state.get("mics"), False)
-                prof["outputs"] = clean(state.get("outputs"), True)
+                prof["mics"] = clean(state.get("mics"))
+                prof["outputs"] = clean(state.get("outputs"))
                 hk = state.get("hotkeys") or {}
                 bindings = []
                 for b in hk.get("bindings") or []:
@@ -3257,11 +3295,48 @@ class App:
                 app.history.clear()
                 return {"ok": True}
 
-            def check_updates(self_api):
-                # blocks this webview worker thread until the check (and any
-                # consent dialog) resolves; quiet=True suppresses the tray
-                # toast — the returned string shows inline in the settings row
-                return app._update_check(quiet=True)
+            def update_info(self_api):
+                """Version-context check for the settings row — no dialog.
+                A found update is cached on the app; install_update consumes
+                it (the "Update & restart" click is the user's consent)."""
+                try:
+                    release = fetch_latest_release()
+                except Exception as e:
+                    log.info("update check failed: %s", e)
+                    return {"status": "error",
+                            "msg": "Update check failed (offline?)"}
+                latest = parse_version(release.get("tag_name", ""))
+                if not latest or latest <= parse_version(VERSION):
+                    app._pending_release = None
+                    return {"status": "uptodate", "current": VERSION}
+                app._pending_release = release
+                return {"status": "update", "current": VERSION,
+                        "latest": release.get("tag_name", "").lstrip("vV")}
+
+            def install_update(self_api):
+                """One-click install of the release update_info found, then
+                restart. Failure falls back to opening the releases page
+                (same fail-open rule as the dialog flow)."""
+                release = getattr(app, "_pending_release", None)
+                if not release:
+                    return {"ok": False, "msg": "Check for updates first"}
+                if not IS_FROZEN:
+                    webbrowser.open(RELEASES_URL)
+                    return {"ok": False,
+                            "msg": "Running from source — update with git pull"}
+                try:
+                    if not apply_update(release):
+                        raise RuntimeError("release has no .exe asset")
+                except Exception as e:
+                    log.warning("update failed: %s", e)
+                    webbrowser.open(RELEASES_URL)
+                    return {"ok": False,
+                            "msg": "Update failed — opened the release page"}
+                app._pending_release = None
+                # quit off this webview worker thread; the new exe relaunches
+                # itself via --updated once our mutex clears
+                threading.Thread(target=app._quit, daemon=True).start()
+                return {"ok": True}
 
             def setup_eq(self_api):
                 return app._setup_mic_eq()
