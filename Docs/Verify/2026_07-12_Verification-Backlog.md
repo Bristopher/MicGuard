@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-17 — §15 added: profile-switch hotkeys (v1.9)
+**Updated:** 2026-07-18 — §16 added: tray tooltip + Add/Remove Programs entry (v1.9)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -594,6 +594,27 @@ session can.
 7. **Known niggle to judge.** Switching profiles by hotkey while the Settings
    window is open gets reverted by a later Save (save writes back the viewed
    profile as active) — decide if that needs fixing.
+
+## 16. Tray tooltip + Add/Remove Programs entry (v1.9, ~3 min)
+
+**Shipped:** the commit after `fd48c5f` on 2026-07-18 — tray hover tooltip is
+now just "MicGuard" (no version), and the frozen app self-registers in
+Windows' Installed Apps under `HKCU\...\Uninstall\MicGuard` with
+**Publisher = Bristopher**, an `--uninstall` UninstallString, and
+DisplayVersion refreshed on every start (so it tracks updates).
+**Machine-verified:** 121 pytest (5 new `uninstall_entry_values` tests);
+registry entry present after the 1.9.0 test-build relaunch with the exact
+values above; sabotage smoke restored to 85 (AT2020 back online).
+
+1. **Tooltip.** Hover the tray icon — it should say exactly "MicGuard".
+2. **Installed Apps.** Settings → Apps → Installed apps → find MicGuard —
+   version 1.9.0, publisher **Bristopher**, sensible size (~21 MB).
+3. **ARP uninstall path (only if/when you actually want to test it).** The
+   entry's Uninstall button should pop a topmost native yes/no warning; **No**
+   leaves everything untouched; **Yes** kills the tray, removes the Run key +
+   the Installed Apps entry + `%APPDATA%\MicGuard` + the exe. (Reinstall via
+   `install-test.ps1` afterward.) Fine to defer this one until you'd next
+   reinstall anyway.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

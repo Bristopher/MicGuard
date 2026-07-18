@@ -852,3 +852,25 @@ class TestResolveProfileTarget(unittest.TestCase):
     def test_empty_named_profile_never_resolves(self):
         cfg = {"profiles": [{"name": ""}, {"name": "B"}], "active_profile": "B"}
         self.assertIsNone(m.resolve_profile_target("profile:", cfg))
+
+
+class TestUninstallEntryValues(unittest.TestCase):
+    VALS = m.uninstall_entry_values(r"C:\Apps\MicGuard\MicGuard.exe", "1.9.0", 20000)
+
+    def test_publisher_is_bristopher(self):
+        self.assertEqual(self.VALS["Publisher"], "Bristopher")
+
+    def test_identity_and_version(self):
+        self.assertEqual(self.VALS["DisplayName"], "MicGuard")
+        self.assertEqual(self.VALS["DisplayVersion"], "1.9.0")
+
+    def test_uninstall_string_quotes_exe_with_flag(self):
+        self.assertEqual(self.VALS["UninstallString"],
+                         r'"C:\Apps\MicGuard\MicGuard.exe" --uninstall')
+
+    def test_install_location_is_exe_dir(self):
+        self.assertEqual(self.VALS["InstallLocation"], r"C:\Apps\MicGuard")
+
+    def test_dword_values_are_ints(self):
+        for k in ("NoModify", "NoRepair", "EstimatedSize"):
+            self.assertIsInstance(self.VALS[k], int)

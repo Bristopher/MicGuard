@@ -30,6 +30,8 @@ CONFIG_DIR = os.path.join(os.environ["APPDATA"], APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 LOG_PATH = os.path.join(CONFIG_DIR, "micguard.log")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\MicGuard"
+PUBLISHER = "Bristopher"
 WATCHDOG_SECONDS = 15  # safety net; real work is event-driven
 VOLUME_EPSILON = 0.005
 RECOMMENDED_VOLUME = 85  # the AT2020 sweet spot — "Use recommended" in settings
@@ -1383,6 +1385,52 @@ def set_run_at_startup(enabled: bool) -> None:
                 pass
 
 
+def uninstall_entry_values(exe: str, version: str, size_kb: int) -> dict:
+    """The Add/Remove Programs values for the frozen install. Pure — the
+    registry write lives in register_uninstall_entry."""
+    return {
+        "DisplayName": APP_NAME,
+        "DisplayVersion": version,
+        "Publisher": PUBLISHER,
+        "DisplayIcon": exe,
+        "InstallLocation": os.path.dirname(exe),
+        "UninstallString": f'"{exe}" --uninstall',
+        "URLInfoAbout": f"https://github.com/{GITHUB_REPO}",
+        "NoModify": 1,
+        "NoRepair": 1,
+        "EstimatedSize": size_kb,
+    }
+
+
+def register_uninstall_entry() -> None:
+    """Register in Windows' Installed Apps / Add-Remove Programs (HKCU — no
+    admin, mirroring the Run-key rule). Frozen only; re-run every start so
+    DisplayVersion tracks updates. Logs and degrades — never blocks startup."""
+    if not IS_FROZEN:
+        return
+    try:
+        exe = sys.executable
+        try:
+            size_kb = os.path.getsize(exe) // 1024
+        except OSError:
+            size_kb = 0
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as key:
+            for name, val in uninstall_entry_values(exe, VERSION, size_kb).items():
+                kind = winreg.REG_DWORD if isinstance(val, int) else winreg.REG_SZ
+                winreg.SetValueEx(key, name, 0, kind, val)
+    except OSError as e:
+        log.warning("could not register Add/Remove entry: %s", e)
+
+
+def unregister_uninstall_entry() -> None:
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("could not remove Add/Remove entry: %s", e)
+
+
 def parse_version(tag: str):
     return tuple(int(p) for p in tag.lstrip("vV").split(".") if p.isdigit())
 
@@ -1449,6 +1497,7 @@ def cleanup_old_exe():
 
 def uninstall_self() -> None:
     set_run_at_startup(False)
+    unregister_uninstall_entry()
     shutil.rmtree(CONFIG_DIR, ignore_errors=True)
     if IS_FROZEN:
         current = sys.executable
@@ -1467,6 +1516,37 @@ def uninstall_self() -> None:
             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
             close_fds=True,
         )
+
+
+def uninstall_from_arp() -> None:
+    """The Add/Remove Programs 'Uninstall' button path (MicGuard.exe
+    --uninstall). Consent first (native topmost MessageBox — the webview stack
+    never starts on this path), then stop the running instance, wait for its
+    mutex, and remove everything via the same uninstall_self as the tray."""
+    import ctypes
+    res = ctypes.windll.user32.MessageBoxW(
+        None,
+        "Remove MicGuard from this PC?\n\n"
+        "This deletes the app, its settings, and its startup entry.",
+        f"Uninstall {APP_NAME}",
+        0x00000004 | 0x00000030 | 0x00040000 | 0x00010000,
+    )  # MB_YESNO | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND
+    if res != 6:  # IDYES
+        return
+    try:
+        import psutil  # ships with pycaw
+        keep = {os.getpid(), os.getppid()}  # us + our onefile bootstrap parent
+        for p in psutil.process_iter(["pid", "name"]):
+            name = (p.info["name"] or "").lower()
+            if name == "micguard.exe" and p.info["pid"] not in keep:
+                try:
+                    p.kill()
+                except psutil.Error:
+                    pass
+    except Exception as e:
+        log.warning("could not stop the running instance: %s", e)
+    already_running(10.0)  # block until the dying instance releases the mutex
+    uninstall_self()
 
 
 def already_running(wait_seconds: float = 0.0) -> bool:
@@ -2711,7 +2791,7 @@ class App:
             pystray.MenuItem("Quit", self._quit),
         )
         self.icon = pystray.Icon(
-            APP_NAME, self._make_icon_image(), f"{APP_NAME} v{VERSION}", menu
+            APP_NAME, self._make_icon_image(), APP_NAME, menu
         )
         self.icon.run_detached()
         self._patch_tray_clicks()
@@ -4169,11 +4249,15 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
     log.info("%s v%s starting (frozen=%s)", APP_NAME, VERSION, IS_FROZEN)
+    if IS_FROZEN and "--uninstall" in sys.argv:
+        uninstall_from_arp()
+        return
     if already_running(15.0 if "--updated" in sys.argv else 0.0):
         log.info("another instance is running; exiting")
         return
     if IS_FROZEN:
         threading.Thread(target=cleanup_old_exe, daemon=True).start()
+        register_uninstall_entry()
     app = App()
     if app.first_run and app.cfg.get("run_at_startup"):
         try:
