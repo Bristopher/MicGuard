@@ -4351,6 +4351,12 @@ def main():
     if already_running(15.0 if "--updated" in sys.argv else 0.0):
         log.info("another instance is running; exiting")
         return
+    if "--updated" in sys.argv:
+        # the old instance's WebView2 children release the user-data folder
+        # AFTER its mutex clears; starting our GUI too early fails WebView2
+        # init with 0x8007139F and leaves a tray with a dead UI loop (every
+        # menu/settings click times out). Seen live 2026-07-18.
+        time.sleep(3.0)
     if IS_FROZEN:
         threading.Thread(target=cleanup_old_exe, daemon=True).start()
         register_uninstall_entry()

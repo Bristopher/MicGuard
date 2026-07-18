@@ -17,7 +17,15 @@ if (-not (Test-Path dist\MicGuard.exe)) { throw 'No dist\MicGuard.exe - build fi
 
 $target = Join-Path $env:LOCALAPPDATA 'Programs\MicGuard\MicGuard.exe'
 Stop-Process -Name MicGuard -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
+# Wait for the old instance AND its WebView2 children to fully exit before
+# relaunching. Relaunching while msedgewebview2 still holds the user-data
+# folder makes the new instance's WebView2 init fail with 0x8007139F — the
+# tray then runs with a dead GUI loop (every menu/settings click times out
+# 20 s and fails). Bit us 2026-07-18.
+for ($i = 0; $i -lt 20 -and (Get-Process MicGuard -ErrorAction SilentlyContinue); $i++) {
+    Start-Sleep -Milliseconds 500
+}
+Start-Sleep -Seconds 3   # grace for WebView2 children to release the data dir
 New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
 Copy-Item dist\MicGuard.exe $target -Force
 Start-Process $target
