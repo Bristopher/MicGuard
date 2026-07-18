@@ -1489,6 +1489,89 @@ def apply_update(release: dict) -> bool:
     return True
 
 
+def _process_snapshot():
+    """[(pid, ppid, exe_name)] for every process, from ONE Toolhelp32
+    snapshot — milliseconds, no per-process handle opens (psutil's
+    process_iter with attrs took tens of seconds here). ctypes gotcha: the
+    snapshot HANDLE must be c_void_p on x64 or it truncates (same class of
+    bug as the HMONITOR restype one, see Architecture Gotchas)."""
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", ctypes.c_ulong), ("cntUsage", ctypes.c_ulong),
+                    ("th32ProcessID", ctypes.c_ulong),
+                    ("th32DefaultHeapID", ctypes.c_void_p),
+                    ("th32ModuleID", ctypes.c_ulong),
+                    ("cntThreads", ctypes.c_ulong),
+                    ("th32ParentProcessID", ctypes.c_ulong),
+                    ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", ctypes.c_ulong),
+                    ("szExeFile", ctypes.c_wchar * 260)]
+    k32 = ctypes.windll.kernel32
+    k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == ctypes.c_void_p(-1).value:
+        return []
+    out = []
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = k32.Process32FirstW(ctypes.c_void_p(snap), ctypes.byref(entry))
+        while ok:
+            out.append((entry.th32ProcessID, entry.th32ParentProcessID,
+                        entry.szExeFile))
+            ok = k32.Process32NextW(ctypes.c_void_p(snap), ctypes.byref(entry))
+    finally:
+        k32.CloseHandle(ctypes.c_void_p(snap))
+    return out
+
+
+def _cmdline_of(pid) -> str:
+    """Command line of a process, '' if gone/inaccessible."""
+    try:
+        import psutil  # ships with pycaw
+        return " ".join(psutil.Process(pid).cmdline())
+    except Exception:
+        return ""
+
+
+def webview_teardown_pending(procs, keep, cmdline_of=_cmdline_of) -> bool:
+    """True while the OLD instance is still tearing down: any MicGuard.exe
+    that isn't us/our bootstrap parent, or any msedgewebview2.exe spawned
+    FOR MicGuard — WebView2 children carry --webview-exe-name=<owner>.exe
+    on their command line, which is the only reliable ownership marker
+    (parent-pid orphan checks false-positive on other apps' WebView2 trees,
+    whose browser processes routinely outlive their parent). Ours can't
+    match yet: this runs before our GUI starts. Pure over (procs,
+    cmdline_of); fed by _process_snapshot."""
+    for pid, _ppid, name in procs:
+        n = (name or "").lower()
+        if n == "micguard.exe" and pid not in keep:
+            return True
+        if (n == "msedgewebview2.exe"
+                and "--webview-exe-name=micguard.exe" in cmdline_of(pid).lower()):
+            return True
+    return False
+
+
+def wait_webview_teardown(timeout: float = 5.0) -> float:
+    """After an update relaunch, the OLD instance's WebView2 children can
+    briefly outlive its mutex; starting our GUI while they still hold the
+    shared user-data dir fails init with 0x8007139F and leaves a dead UI
+    loop (2026-07-18). Dynamic: polls webview_teardown_pending every 150 ms
+    and returns the moment it clears — usually well under a second; the
+    timeout only caps a wedged teardown. Returns seconds waited."""
+    start = time.monotonic()
+    keep = {os.getpid(), os.getppid()}
+    try:
+        while time.monotonic() - start < timeout:
+            if not webview_teardown_pending(_process_snapshot(), keep):
+                break
+            time.sleep(0.15)
+    except Exception as e:
+        log.warning("webview teardown wait failed (%s) — waiting flat 1 s", e)
+        time.sleep(1.0)
+    return time.monotonic() - start
+
+
 def cleanup_old_exe():
     """Delete the .old left behind by apply_update once the old process exits."""
     old = sys.executable + ".old"
@@ -4352,11 +4435,8 @@ def main():
         log.info("another instance is running; exiting")
         return
     if "--updated" in sys.argv:
-        # the old instance's WebView2 children release the user-data folder
-        # AFTER its mutex clears; starting our GUI too early fails WebView2
-        # init with 0x8007139F and leaves a tray with a dead UI loop (every
-        # menu/settings click times out). Seen live 2026-07-18.
-        time.sleep(3.0)
+        waited = wait_webview_teardown()
+        log.info("update relaunch: WebView2 teardown wait %.2fs", waited)
     if IS_FROZEN:
         threading.Thread(target=cleanup_old_exe, daemon=True).start()
         register_uninstall_entry()

@@ -898,3 +898,48 @@ class TestUninstallEntryValues(unittest.TestCase):
     def test_dword_values_are_ints(self):
         for k in ("NoModify", "NoRepair", "EstimatedSize"):
             self.assertIsInstance(self.VALS[k], int)
+
+
+class TestWebviewTeardownPending(unittest.TestCase):
+    # cmdline_of is injected so no real process queries happen in tests
+    @staticmethod
+    def _cmd(mapping):
+        return lambda pid: mapping.get(pid, "")
+
+    def test_clear_when_no_micguard_leftovers(self):
+        procs = [(4, 0, "System"), (100, 4, "explorer.exe"),
+                 (200, 100, "msedgewebview2.exe")]
+        cmd = self._cmd({200: "msedgewebview2.exe --webview-exe-name=howler.exe"})
+        self.assertFalse(m.webview_teardown_pending(procs, keep={1, 2}, cmdline_of=cmd))
+
+    def test_other_micguard_process_pends(self):
+        procs = [(50, 4, "MicGuard.exe")]
+        self.assertTrue(m.webview_teardown_pending(procs, keep={1, 2},
+                                                   cmdline_of=self._cmd({})))
+
+    def test_own_micguard_pair_ignored(self):
+        procs = [(1, 4, "MicGuard.exe"), (2, 1, "MicGuard.exe")]
+        self.assertFalse(m.webview_teardown_pending(procs, keep={1, 2},
+                                                    cmdline_of=self._cmd({})))
+
+    def test_micguard_owned_webview_child_pends(self):
+        procs = [(300, 9999, "msedgewebview2.exe")]
+        cmd = self._cmd({300: '"...msedgewebview2.exe" --embedded-browser-webview=1 '
+                              "--webview-exe-name=MicGuard.exe --user-data-dir=..."})
+        self.assertTrue(m.webview_teardown_pending(procs, keep=set(), cmdline_of=cmd))
+
+    def test_other_apps_webview_children_ignored(self):
+        # other apps' WebView2 trees (even parentless ones) must never match
+        procs = [(300, 9999, "msedgewebview2.exe"), (301, 9999, "MSEDGEWEBVIEW2.EXE")]
+        cmd = self._cmd({300: "--webview-exe-name=obsctm-desktop.exe",
+                         301: "--webview-exe-name=howler.exe"})
+        self.assertFalse(m.webview_teardown_pending(procs, keep=set(), cmdline_of=cmd))
+
+    def test_vanished_process_empty_cmdline_is_clear(self):
+        procs = [(300, 9999, "msedgewebview2.exe")]
+        self.assertFalse(m.webview_teardown_pending(procs, keep=set(),
+                                                    cmdline_of=self._cmd({})))
+
+    def test_empty_snapshot_is_clear(self):
+        self.assertFalse(m.webview_teardown_pending([], keep=set(),
+                                                    cmdline_of=self._cmd({})))

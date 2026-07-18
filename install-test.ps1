@@ -22,10 +22,18 @@ Stop-Process -Name MicGuard -Force -ErrorAction SilentlyContinue
 # folder makes the new instance's WebView2 init fail with 0x8007139F — the
 # tray then runs with a dead GUI loop (every menu/settings click times out
 # 20 s and fails). Bit us 2026-07-18.
-for ($i = 0; $i -lt 20 -and (Get-Process MicGuard -ErrorAction SilentlyContinue); $i++) {
-    Start-Sleep -Milliseconds 500
+for ($i = 0; $i -lt 40 -and (Get-Process MicGuard -ErrorAction SilentlyContinue); $i++) {
+    Start-Sleep -Milliseconds 250
 }
-Start-Sleep -Seconds 3   # grace for WebView2 children to release the data dir
+# dynamic grace: WebView2 children carry --webview-exe-name=<owner>.exe on
+# their command line — wait only while MicGuard-owned ones still hold the
+# shared user-data dir (usually <0.5 s; other apps' WebView2 never match)
+for ($i = 0; $i -lt 25; $i++) {
+    $held = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'webview-exe-name=MicGuard\.exe' }
+    if (-not $held) { break }
+    Start-Sleep -Milliseconds 200
+}
 New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
 Copy-Item dist\MicGuard.exe $target -Force
 Start-Process $target
