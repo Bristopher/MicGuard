@@ -9,6 +9,15 @@ Testing a build locally WITHOUT releasing is a different script:
 `.\install-test.ps1` (build → install over `%LOCALAPPDATA%\Programs\MicGuard`
 → relaunch → smoke). No version, no tag, no GitHub.
 
+There is also a howler-style interactive driver, `.\build-release-FULL_Build.ps1`:
+version-stamp → build → archive to `Releases\vX.Y.Z\` → optional local
+install/relaunch → then a publish menu: **[1]** release now (it just calls
+`release.ps1` — still the single release path), **[2]** (default) emit a
+ready-to-paste **Claude prompt** (saved next to the archived exe + copied to
+the clipboard) that has Claude draft the release notes from the git log since
+the last tag and run `release.ps1 -Notes` itself, or **[3]** build only.
+Flags: `-Version x.y.z`, `-Install`/`-NoInstall`, `-PromptOnly`.
+
 ## The one command
 
 ```powershell

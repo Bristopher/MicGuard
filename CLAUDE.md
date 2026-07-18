@@ -72,6 +72,7 @@ uv run pythonw micguard.py                       # run the tray app from source
 Get-Content $env:APPDATA\MicGuard\micguard.log -Tail 20   # the only debug surface
 .\install-test.ps1                               # TEST-BUILD path: build from working tree → install over %LOCALAPPDATA%\Programs\MicGuard → relaunch → log tail + sabotage smoke (no version/tag/release)
 .\release.ps1 [-Version x.y.z|-Bump patch|minor|major]  # THE release path: version picked at build time (interactive when no args)→build→tag→gh release (see RELEASING.md)
+.\build-release-FULL_Build.ps1                   # howler-style driver: stamp→build→archive→optional install→publish menu (release now via release.ps1 / emit Claude release-notes prompt / build only)
 Stop-Process -Name MicGuard,pythonw -Force       # kill running instances (onefile exe = 2 processes, normal)
 ```
 
