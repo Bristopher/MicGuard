@@ -21,7 +21,7 @@ import webbrowser
 import winreg
 
 APP_NAME = "MicGuard"
-VERSION = "1.10.1"
+VERSION = "1.10.2"
 GITHUB_REPO = "Bristopher/MicGuard"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 EQ_SITE_URL = "https://sourceforge.net/projects/equalizerapo/"
