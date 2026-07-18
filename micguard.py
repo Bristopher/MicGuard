@@ -1692,9 +1692,19 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .gh:hover{color:#fafafa;text-decoration:underline}
 .chknow{color:#71717a;text-decoration:underline}
 .chknow:hover{color:#fafafa}
-#updmsg{margin-left:6px}
-.updbtn{padding:2px 10px;font-size:11.5px;margin-left:8px;border-radius:6px;
-        vertical-align:middle}
+.updrow{display:flex;align-items:center;gap:10px;margin:8px 0 2px}
+.sbtn{height:30px;padding:0 12px;border:1px solid #27272a;background:transparent;
+      color:#fafafa;border-radius:8px;font-size:12.5px;cursor:pointer}
+.sbtn:hover{background:#18181b}
+.sbtn:disabled{opacity:.5;cursor:default}
+#updmsg{font-size:12px;color:#a1a1aa}
+#updcard{margin:8px 0 2px;border:1px solid #27272a;border-radius:10px;padding:12px}
+.updhead{font-size:13px;color:#fafafa;margin-bottom:2px}
+.updcur{color:#71717a;font-size:11px}
+.updnotes{font-size:12px;color:#a1a1aa;white-space:pre-wrap;line-height:1.45;
+          margin-top:6px;max-height:150px;overflow-y:auto}
+.updhint{font-size:11px;color:#a16207;margin-top:8px}
+#updcard .btn{margin-top:10px}
 #savemsg{flex:1;min-width:0;align-self:center;text-align:right;
       font-size:12.5px;font-weight:600;color:#22c55e;
       opacity:0;transition:opacity .3s;white-space:nowrap;overflow:hidden;
@@ -1842,12 +1852,14 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 </div>
 <div class="switchrow">
   <div><div class="lab">Check for updates on launch</div>
-       <div class="hint">Always asks before installing anything &mdash;
-         <a class="chknow" href="javascript:void(0)" onclick="checkUpd()">check now</a><span id="updmsg"></span>
-         <button class="btn primary updbtn" id="updbtn" style="display:none"
-           onclick="installUpd()">Update &amp; restart</button></div></div>
+       <div class="hint">Always asks before installing anything</div></div>
   <label class="switch"><input type="checkbox" id="sw_updates"><span class="knob"></span></label>
 </div>
+<div class="updrow">
+  <button class="sbtn" id="updbtn" onclick="checkUpd()">Check for updates</button>
+  <span id="updmsg"></span>
+</div>
+<div id="updcard" style="display:none"></div>
 <div class="switchrow">
   <div><div class="lab">Fallback alerts</div>
        <div class="hint">Popup when your device disconnects and MicGuard switches to a fallback</div></div>
@@ -1869,40 +1881,45 @@ const hear = document.getElementById('sw_hear');
 let S = null, recommended = 85, promptMode = null, lastTargetId = null;
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-// manual update check — shows the version context inline; a found update
-// reveals the one-click "Update & restart" button (the click IS the consent)
-let updT = null;
+// manual update check, MediaStopper-style: a found update expands into a
+// card with version context + release notes + one Install button (that
+// click IS the consent — no second dialog)
 async function checkUpd(){
   const m = document.getElementById('updmsg'), b = document.getElementById('updbtn');
-  b.style.display = 'none'; b.disabled = false;
-  clearTimeout(updT);
-  m.style.color = '#a1a1aa'; m.textContent = 'checking…';
+  const card = document.getElementById('updcard');
+  b.disabled = true; card.style.display = 'none';
+  m.style.color = '#a1a1aa'; m.textContent = 'Checking…';
   let r = null;
   try { r = await pywebview.api.update_info(); }
-  catch(e){ r = {status: 'error', msg: 'Update check failed'}; }
-  if (r.status === 'update'){
-    m.style.color = '#22c55e';
-    m.textContent = `v${r.current} → v${r.latest} available`;
-    b.style.display = '';
-  } else if (r.status === 'uptodate'){
-    m.style.color = '#22c55e'; m.textContent = `Up to date (v${r.current})`;
-    updT = setTimeout(() => { m.textContent = ''; }, 8000);
+  catch(e){ r = null; }
+  b.disabled = false;
+  if (r && r.status === 'update'){
+    m.textContent = '';
+    const notes = r.notes ? `<div class="updnotes">${esc(r.notes)}</div>` : '';
+    const hint = r.frozen ? '' : '<div class="updhint">Running from source &mdash; ' +
+      'Install opens the download page. One-click install works in the packaged MicGuard.exe.</div>';
+    card.innerHTML = `<div class="updhead">Update available &mdash; <b>v${esc(r.latest)}</b> ` +
+      `<span class="updcur">you have v${esc(r.current)}</span></div>` + notes +
+      `<button class="btn primary" onclick="installUpd(this)">Install v${esc(r.latest)} &amp; relaunch</button>` +
+      hint;
+    card.style.display = 'block';
+  } else if (r && r.status === 'uptodate'){
+    m.style.color = '#22c55e'; m.textContent = `You're on the latest version (v${r.current})`;
   } else {
-    m.style.color = '#f59e0b'; m.textContent = r.msg || 'Update check failed';
-    updT = setTimeout(() => { m.textContent = ''; }, 8000);
+    m.style.color = '#f59e0b';
+    m.textContent = (r && r.msg) || 'Update check failed';
   }
 }
-async function installUpd(){
-  const m = document.getElementById('updmsg'), b = document.getElementById('updbtn');
-  b.disabled = true;
-  m.style.color = '#a1a1aa'; m.textContent = 'downloading update…';
+async function installUpd(btn){
+  const label = btn.textContent, m = document.getElementById('updmsg');
+  btn.disabled = true; btn.textContent = 'Installing…';
   let r = null;
   try { r = await pywebview.api.install_update(); }
   catch(e){ r = {ok: false, msg: 'Update failed'}; }
-  if (r && r.ok){ m.style.color = '#22c55e'; m.textContent = 'Restarting…'; }
+  if (r && r.ok){ btn.textContent = 'Restarting…'; }
   else {
     m.style.color = '#f59e0b'; m.textContent = (r && r.msg) || 'Update failed';
-    b.disabled = false;
+    btn.disabled = false; btn.textContent = label;
   }
 }
 function listOf(flow){ return flow === 'out' ? S.outputs : S.mics; }
@@ -3310,8 +3327,12 @@ class App:
                     app._pending_release = None
                     return {"status": "uptodate", "current": VERSION}
                 app._pending_release = release
+                notes = (release.get("body") or "").strip()
+                if len(notes) > 600:
+                    notes = notes[:600].rstrip() + "…"
                 return {"status": "update", "current": VERSION,
-                        "latest": release.get("tag_name", "").lstrip("vV")}
+                        "latest": release.get("tag_name", "").lstrip("vV"),
+                        "notes": notes, "frozen": IS_FROZEN}
 
             def install_update(self_api):
                 """One-click install of the release update_info found, then

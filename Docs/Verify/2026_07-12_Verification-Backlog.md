@@ -631,11 +631,14 @@ holds volume with no action needed.
    default). Re-check + Save → sub-second restore again.
 2. **Fresh-install default.** (Only if you ever wipe `%APPDATA%\MicGuard`:)
    first run auto-adds your mic with hold UNCHECKED — the user opts in.
-3. **Update button.** Settings → "check now": with no update it should say
-   "Up to date (v1.10.0)". When the next release exists, it should say
-   "v1.10.0 → vX.Y.Z available" with an **Update & restart** button — one
-   click downloads, swaps the exe, and relaunches, no extra dialog. (Fully
-   testable at the next release; the tray-menu check keeps the old dialog.)
+3. **Update button (MediaStopper-style, reworked same day).** Settings now
+   has a real bordered **Check for updates** button under the update toggle.
+   No update → "You're on the latest version (v1.10.0)" next to it. When the
+   next release exists → a bordered card expands: "Update available — vX.Y.Z
+   (you have v1.10.0)", the release notes, and one **Install vX.Y.Z &
+   relaunch** button — one click downloads, swaps the exe, relaunches, no
+   extra dialog. (Fully testable at the next release; the tray-menu check
+   keeps the old dialog.)
 
 ## Sweep log (commit ranges reviewed for unverified work)
 
