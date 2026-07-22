@@ -34,6 +34,7 @@ about doesn't exist.
 | [superpowers/plans/2026-07-17 profile-hotkeys](superpowers/plans/2026-07-17-profile-hotkeys.md) | v1.9 implementation plan — 4 tasks (pure resolvers, shared App.set_profile + OSD note mode, dropdown/step-lock wiring, docs+backlog) |
 | [Features/Mic-EQ-Extension](Features/Mic-EQ-Extension.md) | Shipped v1.8 feature doc: optional Mic EQ extension (gain + bass boost via Equalizer APO) — pure renderer/writer core, always-visible settings card, guided consent-based setup flow, enforced-mic-following wiring, API/config/testing/troubleshooting |
 | [Features/Event-History](Features/Event-History.md) | Shipped v1.9 feature doc: notable-event history (`history_push` coalesce core, `HistoryRecorder` debounce/cap/persistence, 9 recording call sites, Settings History card + Clear) — architecture/API/config/testing/troubleshooting |
+| [Features/Fullscreen-Safe-Popups](Features/Fullscreen-Safe-Popups.md) | Shipped v1.6.1→v1.8.1 feature doc: how popups appear over games — no-activate windows, the WebView2 priming cycle, exclusive-fullscreen detection, and the same-monitor auto-learn probe (`fullscreen_popups` / `fse_incompatible`) — architecture/API/config/testing/troubleshooting |
 
 ## Lifecycle folders
 - `In-Progress/<owner>/` — in-flight specs/plans/notes
