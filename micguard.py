@@ -77,7 +77,7 @@ log = logging.getLogger(APP_NAME)
 # Core Audio plumbing (comtypes / pycaw)
 # --------------------------------------------------------------------------
 
-from ctypes import POINTER, cast
+from ctypes import POINTER
 from comtypes import CLSCTX_ALL, GUID, COMMETHOD, HRESULT, COMObject, CoCreateInstance, IUnknown
 from ctypes.wintypes import LPCWSTR, INT
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
@@ -321,8 +321,12 @@ def autodetect_device():
 def get_endpoint_volume(device_id: str):
     enumerator = AudioUtilities.GetDeviceEnumerator()
     imm = enumerator.GetDevice(device_id)
+    # QueryInterface, NEVER ctypes.cast: cast makes a second owning wrapper
+    # for the same single COM ref (shared _objects cycle), whose deferred
+    # GC-time Release lands on freed memory — the recurring 0xc0000005 in
+    # _ctypes.pyd (root-caused 2026-07-21)
     interface = imm.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    return cast(interface, POINTER(IAudioEndpointVolume))
+    return interface.QueryInterface(IAudioEndpointVolume)
 
 
 def get_endpoint_meter(device_id: str):
@@ -331,7 +335,7 @@ def get_endpoint_meter(device_id: str):
     enumerator = AudioUtilities.GetDeviceEnumerator()
     imm = enumerator.GetDevice(device_id)
     interface = imm.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
-    return cast(interface, POINTER(IAudioMeterInformation))
+    return interface.QueryInterface(IAudioMeterInformation)  # no cast — see get_endpoint_volume
 
 
 def get_session_meters() -> dict:
@@ -454,10 +458,10 @@ class MicMonitor(threading.Thread):
             mic = enumerator.GetDevice(self.device_id)
             spk = enumerator.GetDefaultAudioEndpoint(
                 EDataFlow.eRender.value, ERole.eMultimedia.value)
-            cap_client = cast(mic.Activate(IAudioClient._iid_, CLSCTX_ALL, None),
-                              POINTER(IAudioClient))
-            ren_client = cast(spk.Activate(IAudioClient._iid_, CLSCTX_ALL, None),
-                              POINTER(IAudioClient))
+            cap_client = mic.Activate(
+                IAudioClient._iid_, CLSCTX_ALL, None).QueryInterface(IAudioClient)
+            ren_client = spk.Activate(
+                IAudioClient._iid_, CLSCTX_ALL, None).QueryInterface(IAudioClient)
             # one format for both sides (the speakers' mix format); the
             # AUTOCONVERT flags make WASAPI resample the mic side to match
             fmt = ren_client.GetMixFormat()
@@ -466,10 +470,10 @@ class MicMonitor(threading.Thread):
             duration = 1_000_000  # 100 ms buffers (REFERENCE_TIME units)
             cap_client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, duration, 0, fmt, None)
             ren_client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, duration, 0, fmt, None)
-            capture = cast(cap_client.GetService(IAudioCaptureClient._iid_),
-                           POINTER(IAudioCaptureClient))
-            render = cast(ren_client.GetService(IAudioRenderClient._iid_),
-                          POINTER(IAudioRenderClient))
+            capture = cap_client.GetService(
+                IAudioCaptureClient._iid_).QueryInterface(IAudioCaptureClient)
+            render = ren_client.GetService(
+                IAudioRenderClient._iid_).QueryInterface(IAudioRenderClient)
             block = fmt.contents.nBlockAlign
             buffer_frames = ren_client.GetBufferSize()
             cap_client.Start()
@@ -548,8 +552,8 @@ def _default_render_volume():
     enumerator = AudioUtilities.GetDeviceEnumerator()
     imm = enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender.value,
                                              ERole.eMultimedia.value)
-    return cast(imm.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None),
-               POINTER(IAudioEndpointVolume))
+    return imm.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL,
+                        None).QueryInterface(IAudioEndpointVolume)
 
 
 class MONITORINFO(ctypes.Structure):

@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-18 — §17 added: mic volume-hold toggle + one-click update button (v1.10)
+**Updated:** 2026-07-21 19:25 — §18 added: COM double-release crash fix (ctypes.cast → QueryInterface, root cause of the recurring _ctypes.pyd 0xc0000005)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -639,6 +639,36 @@ holds volume with no action needed.
    relaunch** button — one click downloads, swaps the exe, relaunches, no
    extra dialog. (Fully testable at the next release; the tray-menu check
    keeps the old dialog.)
+
+## 18. COM double-release crash fix — ctypes.cast → QueryInterface (2026-07-21, ~1 gaming session)
+
+**Shipped:** 2026-07-21 (the commit after `67a824b`), root-causing the recurring
+silent crash (WER: `0xc0000005` in `_ctypes.pyd` on 7/15, 7/16 ×2, 7/17, 7/21 —
+the "crashes after opening the Shift+F3 mixer" report).
+**Root cause (from the 7/21 crash dump):** every `ctypes.cast(Activate(...))`
+helper created TWO owning comtypes wrappers for ONE COM reference sharing a
+cyclic `_objects` dict; the first wrapper's death freed the audio object, the
+second Release fired later from a GC cycle-collection on an arbitrary thread —
+a use-after-free that crashed whenever the freed block had been reused (likely
+at mixer open: 2 concurrent session enumerations + Activates + WebView2 churn).
+**Machine-verified:** 130 pytest green; 2,000-iteration Activate/GC stress on
+the fixed `get_endpoint_volume`/`_default_render_volume`; sabotage restore to
+85 in <1 s; 30 Shift+F3 mixer open/close cycles with zero crashes; `cast`
+removed from the ctypes import (pycaw itself already used the safe
+`QueryInterface` pattern).
+
+1. **The real-world repro.** Next gaming session (Discord + game running),
+   open the Shift+F3 mixer a bunch over an evening. Before the fix this died
+   silently within days (5 WER crashes in a week). Zero crashes across a few
+   sessions = verified — also check Event Viewer → Application for new
+   MicGuard `_ctypes.pyd` entries (there should be none ever again).
+2. **Hear yourself + settings meter still work** (their audio-client casts
+   were also converted): Settings → mic meter moves, hear-yourself monitors
+   without static or lockup.
+3. **Side observation to keep an eye on:** at the 7/21 crash, EVERY mixer
+   nav key (1–9, arrows, Esc, WASD) failed to register — something else on
+   the PC held them all (an AHK script / macro tool while gaming?). Unrelated
+   to the crash, but if mixer keys ever feel dead in-game, that's what it is.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 
