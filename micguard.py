@@ -2609,6 +2609,8 @@ body{color:#fafafa;padding:0;user-select:none;overflow:hidden;
   <div class="foot">Esc closes &middot; 1&ndash;9 pick &middot; &#8593;&#8595; adjust</div>
 </div>
 <script>
+var MIX = {hoverSelect:true, drag:false, scroll:false};
+var dragging = false;
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function setMixer(model){
@@ -2620,7 +2622,7 @@ function setMixer(model){
     // mark = "100%"); the main fill scales into the remaining 75%.
     const fill = r.pct === null ? 0 : Math.min(100, r.pct) / 100 * 75;
     const over = r.boost ? Math.min(25, 5 + r.boost) : 0;
-    return `<div class="row${i === model.selected ? ' sel' : ''}${r.muted ? ' muted' : ''}">
+    return `<div class="row${i === model.selected ? ' sel' : ''}${r.muted ? ' muted' : ''}" data-i="${i}">
       <span class="badge">${i + 1}</span>
       <span class="info"><span class="name">${esc(r.label)}${
         r.ducked ? `<span class="duck">ducked &minus;${r.ducked}%</span>` : ''}${
@@ -2635,6 +2637,9 @@ function setMixer(model){
   document.getElementById('dotsup').className = 'dots' + (model.dotsAbove ? ' on' : '');
   document.getElementById('dotsdn').className = 'dots' + (model.dotsBelow ? ' on' : '');
   if (model.footer) document.querySelector('.foot').textContent = model.footer;
+  MIX.hoverSelect = model.hoverSelect !== false;
+  MIX.drag = !!model.drag;
+  MIX.scroll = !!model.scroll;
 }
 function setLevels(levels){
   document.querySelectorAll('.bar').forEach(b => {
@@ -2642,6 +2647,38 @@ function setLevels(levels){
     b.querySelector('.pulse').style.width = (Math.min(1, v) * 75) + '%';
   });
 }
+function rowIndexFrom(e){
+  const row = e.target.closest('.row');
+  return row ? parseInt(row.dataset.i) : null;
+}
+function barFracFrom(e){
+  const row = e.target.closest('.row');
+  if(!row) return null;
+  const bar = row.querySelector('.bar');
+  const rc = bar.getBoundingClientRect();
+  return Math.max(0, Math.min(1, (e.clientX - rc.left) / rc.width));
+}
+document.addEventListener('mousemove', e => {
+  const i = rowIndexFrom(e);
+  if(i === null) return;
+  if(MIX.hoverSelect){
+    document.querySelectorAll('.row').forEach(r =>
+      r.classList.toggle('sel', parseInt(r.dataset.i) === i));
+    if(window.pywebview) pywebview.api.hover(i);   // sync Python selection
+  }
+  if(dragging && MIX.drag){
+    const f = barFracFrom(e);
+    if(f !== null && window.pywebview) pywebview.api.set_volume(i, f);
+  }
+});
+document.addEventListener('mousedown', e => {
+  if(!MIX.drag) return;
+  const i = rowIndexFrom(e), f = barFracFrom(e);
+  if(i === null || f === null) return;
+  dragging = true;
+  if(window.pywebview) pywebview.api.set_volume(i, f);
+});
+document.addEventListener('mouseup', () => { dragging = false; });
 </script></body></html>"""
 
 
@@ -2876,6 +2913,7 @@ class App:
         self._mixer_rows = []           # last build_mixer_rows() output (Task 5 reads it)
         self._mixer_shown = False       # True between _show_mixer and _hide_mixer
         self._mixer_vis_n = None        # visible-row count as of the last resize (I2)
+        self._mixer_lock = threading.RLock()   # guards _mixer_sel/_off/_rows + refresh
         self.hotkeys = None             # HotkeyManager while hotkeys are enabled
         self._monitor = None            # MicMonitor while "hear yourself" is on
         self._meter_stop = None         # Event stopping the level-bar pump
@@ -4067,8 +4105,37 @@ class App:
         import webview
         app = self
 
+        class Api:
+            def hover(self_api, index):
+                try:
+                    if not app.cfg.get("mixer_hover_select", True):
+                        return
+                    with app._mixer_lock:
+                        i = app._mixer_off + int(index)
+                        if 0 <= i < len(app._mixer_rows):
+                            app._mixer_sel = i
+                    app._arm_mixer_timer()
+                except Exception as e:
+                    log.warning("mixer hover failed: %s", e)
+
+            def set_volume(self_api, index, xfrac):
+                try:
+                    if not app.cfg.get("mixer_drag", True):
+                        return
+                    _co_initialize()  # webview worker thread
+                    with app._mixer_lock:
+                        i = app._mixer_off + int(index)
+                        if 0 <= i < len(app._mixer_rows):
+                            app._mixer_sel = i
+                            app._mixer_apply(app._mixer_rows[i],
+                                             absolute=bar_x_to_pct(float(xfrac)))
+                            app._refresh_mixer()
+                    app._arm_mixer_timer()
+                except Exception as e:
+                    log.warning("mixer set_volume failed: %s", e)
+
         self._mixer_win = webview.create_window(
-            f"{APP_NAME} Mixer", html=MIXER_HTML,
+            f"{APP_NAME} Mixer", html=MIXER_HTML, js_api=Api(),
             width=MIXER_W, height=300, frameless=True, on_top=True,
             resizable=False, hidden=hidden, min_size=(MIXER_W, 100),
             background_color="#09090b")
@@ -4111,55 +4178,59 @@ class App:
         """Rebuilds the row model from live audio state and pushes it to the
         page. Stashes self._mixer_rows so Task 5's key handler (number keys /
         up-down) can act on the same rows just shown without re-querying."""
-        _co_initialize()
-        sessions = list_app_sessions()
-        fg = get_foreground_exe()
-        # vanish-restore: a boosted app that exited must not leave its victims
-        # ducked (or render a dead boost badge) until the next hotkey press —
-        # the mixer refreshes on open and on every key, so catch it here too
-        if self.hotkeys and any(exe not in sessions
-                                for exe in self.hotkeys.boost.boost):
-            self._restore_boost(self.hotkeys)
-            sessions = list_app_sessions()   # re-read the restored levels
-        boost = self.hotkeys.boost if self.hotkeys else BoostState()
-        system = get_system_volume()
-        mutes = list_app_mutes()
-        mutes["system"] = get_system_mute()
-        rows = build_mixer_rows(self.cfg["hotkeys"]["bindings"], sessions, fg,
-                                boost, system, mutes=mutes)
-        self._mixer_rows = rows
-        self._mixer_sel = min(self._mixer_sel, len(rows) - 1)
-        off, above, below = mixer_viewport(len(rows), self._mixer_sel,
-                                           getattr(self, "_mixer_off", 0))
-        self._mixer_off = off
-        nav = self.cfg.get("mixer_nav", "digits")
-        footer = {"arrows": "Esc closes · ↑↓ pick · ←→ volume · M mute · R 100% · 1–9 jump",
-                  "wasd": "Esc closes · W/S pick · A/D volume · M mute · R 100% · 1–9 jump",
-                  }.get(nav, "Esc closes · 1–9 pick · ↑↓ volume · M mute · R 100%")
-        visible_rows = rows[off:off + MIXER_VISIBLE]
-        model = {"rows": visible_rows,
-                 "selected": self._mixer_sel - off,
-                 "dotsAbove": above, "dotsBelow": below, "footer": footer}
-        self._mixer_win.evaluate_js(f"setMixer({json.dumps(model)})")
-        # v1.7: the rest tier can add/drop rows while the popup is already
-        # open (live sessions), which changes the visible-row count without
-        # a close/reopen. Re-measure/resize ONLY when that count changed —
-        # scrolling (offset changes, same visible count) must stay a no-op
-        # to preserve the no-jitter guarantee.
-        vis_n = len(visible_rows)
-        if self._mixer_shown and vis_n != self._mixer_vis_n:
-            self._mixer_vis_n = vis_n
-            try:
-                h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
-                h = int(h)
-                self._mixer_win.resize(MIXER_W, h)
-                pos = self._mixer_position(h)
-                if pos:
-                    self._mixer_win.move(pos[0], pos[1])
-            except Exception as e:
-                log.warning("mixer resize-on-count-change failed: %s", e)
-        else:
-            self._mixer_vis_n = vis_n
+        with self._mixer_lock:
+            _co_initialize()
+            sessions = list_app_sessions()
+            fg = get_foreground_exe()
+            # vanish-restore: a boosted app that exited must not leave its victims
+            # ducked (or render a dead boost badge) until the next hotkey press —
+            # the mixer refreshes on open and on every key, so catch it here too
+            if self.hotkeys and any(exe not in sessions
+                                    for exe in self.hotkeys.boost.boost):
+                self._restore_boost(self.hotkeys)
+                sessions = list_app_sessions()   # re-read the restored levels
+            boost = self.hotkeys.boost if self.hotkeys else BoostState()
+            system = get_system_volume()
+            mutes = list_app_mutes()
+            mutes["system"] = get_system_mute()
+            rows = build_mixer_rows(self.cfg["hotkeys"]["bindings"], sessions, fg,
+                                    boost, system, mutes=mutes)
+            self._mixer_rows = rows
+            self._mixer_sel = min(self._mixer_sel, len(rows) - 1)
+            off, above, below = mixer_viewport(len(rows), self._mixer_sel,
+                                               getattr(self, "_mixer_off", 0))
+            self._mixer_off = off
+            nav = self.cfg.get("mixer_nav", "digits")
+            footer = {"arrows": "Esc closes · ↑↓ pick · ←→ volume · M mute · R 100% · 1–9 jump",
+                      "wasd": "Esc closes · W/S pick · A/D volume · M mute · R 100% · 1–9 jump",
+                      }.get(nav, "Esc closes · 1–9 pick · ↑↓ volume · M mute · R 100%")
+            visible_rows = rows[off:off + MIXER_VISIBLE]
+            model = {"rows": visible_rows,
+                     "selected": self._mixer_sel - off,
+                     "dotsAbove": above, "dotsBelow": below, "footer": footer,
+                     "hoverSelect": bool(self.cfg.get("mixer_hover_select", True)),
+                     "drag": bool(self.cfg.get("mixer_drag", True)),
+                     "scroll": bool(self.cfg.get("mixer_scroll", False))}
+            self._mixer_win.evaluate_js(f"setMixer({json.dumps(model)})")
+            # v1.7: the rest tier can add/drop rows while the popup is already
+            # open (live sessions), which changes the visible-row count without
+            # a close/reopen. Re-measure/resize ONLY when that count changed —
+            # scrolling (offset changes, same visible count) must stay a no-op
+            # to preserve the no-jitter guarantee.
+            vis_n = len(visible_rows)
+            if self._mixer_shown and vis_n != self._mixer_vis_n:
+                self._mixer_vis_n = vis_n
+                try:
+                    h = self._mixer_win.evaluate_js("document.body.scrollHeight + 2") or 300
+                    h = int(h)
+                    self._mixer_win.resize(MIXER_W, h)
+                    pos = self._mixer_position(h)
+                    if pos:
+                        self._mixer_win.move(pos[0], pos[1])
+                except Exception as e:
+                    log.warning("mixer resize-on-count-change failed: %s", e)
+            else:
+                self._mixer_vis_n = vis_n
 
     def _mixer_position(self, h):
         """(x, y, tried_same) — bottom-center of the popup monitor, 80 px up
