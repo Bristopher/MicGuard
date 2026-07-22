@@ -2679,6 +2679,13 @@ document.addEventListener('mousedown', e => {
   if(window.pywebview) pywebview.api.set_volume(i, f);
 });
 document.addEventListener('mouseup', () => { dragging = false; });
+document.addEventListener('wheel', e => {
+  if(!MIX.scroll) return;
+  const i = rowIndexFrom(e);
+  if(i === null) return;
+  e.preventDefault();
+  if(window.pywebview) pywebview.api.scroll(i, e.deltaY < 0);
+}, {passive:false});
 </script></body></html>"""
 
 
@@ -4133,6 +4140,22 @@ class App:
                     app._arm_mixer_timer()
                 except Exception as e:
                     log.warning("mixer set_volume failed: %s", e)
+
+            def scroll(self_api, index, up):
+                try:
+                    if not app.cfg.get("mixer_scroll", False):
+                        return
+                    _co_initialize()  # webview worker thread
+                    with app._mixer_lock:
+                        i = app._mixer_off + int(index)
+                        if 0 <= i < len(app._mixer_rows):
+                            app._mixer_sel = i
+                            app._mixer_apply(app._mixer_rows[i],
+                                             step=(2 if up else -2))
+                            app._refresh_mixer()
+                    app._arm_mixer_timer()
+                except Exception as e:
+                    log.warning("mixer scroll failed: %s", e)
 
         self._mixer_win = webview.create_window(
             f"{APP_NAME} Mixer", html=MIXER_HTML, js_api=Api(),
