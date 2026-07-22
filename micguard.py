@@ -4405,30 +4405,31 @@ class App:
     def _mixer_key(self, action):
         """Runs on the hotkey thread. Selection, nudge, close — never raises."""
         try:
-            kind, val = action
-            if kind == "close":
-                self._hide_mixer()
-                return
-            if kind == "select":
-                if mixer_select_ok(val, self._mixer_off, len(self._mixer_rows)):
-                    self._mixer_sel = self._mixer_off + val
-            elif kind == "move":
-                self._mixer_sel = max(0, min(len(self._mixer_rows) - 1,
-                                             self._mixer_sel + val))
-            elif kind == "mute":
-                row = self._mixer_rows[self._mixer_sel]
-                if row["key"] == "system":
-                    set_system_mute(not get_system_mute())
-                else:
-                    exe = row.get("exe")
-                    if exe:
-                        set_app_mute(exe, not row.get("muted"))
-            elif kind == "nudge":
-                self._mixer_apply(self._mixer_rows[self._mixer_sel], step=val)
-            elif kind == "reset":
-                self._mixer_apply(self._mixer_rows[self._mixer_sel], absolute=100)
-            self._refresh_mixer()
-            self._arm_mixer_timer()
+            with self._mixer_lock:
+                kind, val = action
+                if kind == "close":
+                    self._hide_mixer()
+                    return
+                if kind == "select":
+                    if mixer_select_ok(val, self._mixer_off, len(self._mixer_rows)):
+                        self._mixer_sel = self._mixer_off + val
+                elif kind == "move":
+                    self._mixer_sel = max(0, min(len(self._mixer_rows) - 1,
+                                                 self._mixer_sel + val))
+                elif kind == "mute":
+                    row = self._mixer_rows[self._mixer_sel]
+                    if row["key"] == "system":
+                        set_system_mute(not get_system_mute())
+                    else:
+                        exe = row.get("exe")
+                        if exe:
+                            set_app_mute(exe, not row.get("muted"))
+                elif kind == "nudge":
+                    self._mixer_apply(self._mixer_rows[self._mixer_sel], step=val)
+                elif kind == "reset":
+                    self._mixer_apply(self._mixer_rows[self._mixer_sel], absolute=100)
+                self._refresh_mixer()
+                self._arm_mixer_timer()
         except Exception as e:
             log.warning("mixer key failed: %s", e)
 
