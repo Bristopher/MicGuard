@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-21 19:25 — §18 added: COM double-release crash fix (ctypes.cast → QueryInterface, root cause of the recurring _ctypes.pyd 0xc0000005)
+**Updated:** 2026-07-22 08:45 — §18.4 added: v1.10.3 rollout watch item (one-off PyInstaller extraction failure on first post-update launch; exe verified byte-identical, relaunch clean)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -669,6 +669,16 @@ removed from the ctypes import (pycaw itself already used the safe
    nav key (1–9, arrows, Esc, WASD) failed to register — something else on
    the PC held them all (an AHK script / macro tool while gaming?). Unrelated
    to the crash, but if mixer keys ever feel dead in-game, that's what it is.
+4. **Watch item from the v1.10.3 rollout (2026-07-22):** the FIRST launch
+   right after the in-app update died with a PyInstaller extraction failure
+   ("No module named 'unicodedata'" + a stale `_MEI` temp-dir warning). The
+   published exe was verified byte-identical to the local build and DOES
+   contain unicodedata.pyd — a manual relaunch started clean, so this was a
+   one-off partial onefile extraction (most plausibly Defender scanning the
+   freshly downloaded exe mid-extract). If a friend ever reports "it crashed
+   right after updating but works when reopened", this is it — and if it
+   recurs, the fix direction is a one-shot retry/relaunch guard in
+   `apply_update`'s relaunch path.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 
