@@ -964,7 +964,8 @@ WM_APP_MIXER_ON, WM_APP_MIXER_OFF = 0x8001, 0x8002
 # 112 = left, 113 = right, 114 = M (v1.7 arrow-nav + mute).
 MIXER_KEYS = ([(100 + i, 0, 0x31 + i) for i in range(9)]           # 1..9
               + [(109, 0, 0x26), (110, 0, 0x28), (111, 0, 0x1B),   # up, down, esc
-                 (112, 0, 0x25), (113, 0, 0x27), (114, 0, 0x4D)])  # left, right, M
+                 (112, 0, 0x25), (113, 0, 0x27), (114, 0, 0x4D),   # left, right, M
+                 (119, 0, 0x52)])                                   # R (reset to 100%)
 
 # W/A/S/D — registered IN ADDITION to MIXER_KEYS, and ONLY while
 # cfg["mixer_nav"] == "wasd": grabbing a gamer's movement keys in any other
@@ -1077,7 +1078,8 @@ class HotkeyManager(threading.Thread):
 
     _MIXER_KEYNAMES = {109: "up", 110: "down", 111: "esc",
                        112: "left", 113: "right", 114: "m",
-                       115: "w", 116: "a", 117: "s", 118: "d"}
+                       115: "w", 116: "a", 117: "s", 118: "d",
+                       119: "r"}
 
     def _mixer_hotkey(self, hid):
         key = (str(hid - 99) if 100 <= hid <= 108
@@ -4131,9 +4133,9 @@ class App:
                                            getattr(self, "_mixer_off", 0))
         self._mixer_off = off
         nav = self.cfg.get("mixer_nav", "digits")
-        footer = {"arrows": "Esc closes · ↑↓ pick · ←→ volume · M mute · 1–9 jump",
-                  "wasd": "Esc closes · W/S pick · A/D volume · M mute · 1–9 jump",
-                  }.get(nav, "Esc closes · 1–9 pick · ↑↓ volume · M mute")
+        footer = {"arrows": "Esc closes · ↑↓ pick · ←→ volume · M mute · R 100% · 1–9 jump",
+                  "wasd": "Esc closes · W/S pick · A/D volume · M mute · R 100% · 1–9 jump",
+                  }.get(nav, "Esc closes · 1–9 pick · ↑↓ volume · M mute · R 100%")
         visible_rows = rows[off:off + MIXER_VISIBLE]
         model = {"rows": visible_rows,
                  "selected": self._mixer_sel - off,
@@ -4288,6 +4290,47 @@ class App:
         except Exception:
             pass
 
+    def _mixer_apply(self, row, *, absolute=None, step=None):
+        """Apply an absolute set (absolute=0..100) OR a relative nudge
+        (step=±n) to one mixer row. Single source of truth for BOTH keyboard
+        and mouse volume changes, so mute/boost/duck feel is identical across
+        input methods. Caller ensures COM is initialized and (task 4+) holds
+        self._mixer_lock. Never raises into the UI on its own — callers wrap."""
+        muted = row.get("muted")
+        if muted:
+            # Windows-mixer feel: first touch on a muted row unmutes it
+            if row["key"] == "system":
+                set_system_mute(False)
+            elif row.get("exe"):
+                set_app_mute(row["exe"], False)
+            if step is not None:
+                return  # a nudge ONLY unmutes on the press that finds it muted
+            # absolute (drag / reset) continues and also sets the level
+        if row["key"] == "system":
+            if absolute is not None:
+                _default_render_volume().SetMasterVolumeLevelScalar(
+                    max(0.0, min(1.0, absolute / 100.0)), None)
+            elif step is not None:
+                adjust_system_volume(step)
+            return
+        exe = row.get("exe")
+        if not exe:
+            return
+        if absolute is not None:
+            # drop any active boost on this exe first so no stale boost badge
+            # survives an absolute set (restores its ducked victims too)
+            if self.hotkeys and exe.lower() in self.hotkeys.boost.boost:
+                self._restore_boost(self.hotkeys)
+            set_app_session(exe, absolute)
+        elif step is not None:
+            sessions = list_app_sessions()
+            if exe.lower() in sessions:
+                boost = self.hotkeys.boost if self.hotkeys else BoostState()
+                game = get_foreground_exe() if row["key"] != "active" else None
+                actions, _ = boosted_nudge(boost, exe, step, sessions, game)
+                for t, pct in actions.items():
+                    set_app_session(t, pct)
+
     def _mixer_key(self, action):
         """Runs on the hotkey thread. Selection, nudge, close — never raises."""
         try:
@@ -4310,27 +4353,9 @@ class App:
                     if exe:
                         set_app_mute(exe, not row.get("muted"))
             elif kind == "nudge":
-                row = self._mixer_rows[self._mixer_sel]
-                if row.get("muted"):
-                    # nudging a muted row unmutes it first (Windows-mixer feel)
-                    if row["key"] == "system":
-                        set_system_mute(False)
-                    else:
-                        exe = row.get("exe")
-                        if exe:
-                            set_app_mute(exe, False)
-                elif row["key"] == "system":
-                    adjust_system_volume(val)
-                else:
-                    exe = row.get("exe")
-                    if exe:
-                        sessions = list_app_sessions()
-                        if exe.lower() in sessions:
-                            boost = self.hotkeys.boost if self.hotkeys else BoostState()
-                            game = get_foreground_exe() if row["key"] != "active" else None
-                            actions, _ = boosted_nudge(boost, exe, val, sessions, game)
-                            for t, pct in actions.items():
-                                set_app_session(t, pct)
+                self._mixer_apply(self._mixer_rows[self._mixer_sel], step=val)
+            elif kind == "reset":
+                self._mixer_apply(self._mixer_rows[self._mixer_sel], absolute=100)
             self._refresh_mixer()
             self._arm_mixer_timer()
         except Exception as e:

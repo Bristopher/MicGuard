@@ -825,7 +825,8 @@ class TestMixerKeyActionWasd(unittest.TestCase):
         self.assertEqual(m.MIXER_WASD_KEYS,
                          [(115, 0, 0x57), (116, 0, 0x41),
                           (117, 0, 0x53), (118, 0, 0x44)])
-        self.assertTrue(all(hid > max(h for h, _, _ in m.MIXER_KEYS)
+        mixer_hids = {h for h, _, _ in m.MIXER_KEYS}
+        self.assertTrue(all(hid not in mixer_hids
                             for hid, _, _ in m.MIXER_WASD_KEYS))
 
 
