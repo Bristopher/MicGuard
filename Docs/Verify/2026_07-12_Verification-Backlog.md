@@ -707,8 +707,8 @@ hook needed).
    matching the keyboard nudge step. Confirm it's really off by default on a
    fresh install/config.
 4. **R reset:** select a row (any method) and press `R` — it snaps to 100%.
-   Check specifically: the System row, and a currently-muted row (should
-   reset to 100% while remaining muted — reset does not auto-unmute).
+   Check specifically: the System row, and a muted row: R unmutes it and
+   sets 100% (consistent with drag/nudge).
 5. **Auto-hide timeout:** in Settings, try `0` (popup stays open until Esc or
    click-away — old behavior), `3`, and `6` (default) — confirm the popup
    closes itself after that many idle seconds, and that any key/mouse

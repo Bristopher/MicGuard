@@ -310,9 +310,9 @@ keypress converge on one code path:
 `MIXER_KEYS` gained `R` (0x52, id 115) alongside the existing ephemeral keys
 (see System-Conventions.md "Hotkey manager" row): pressing `R` while a row is
 selected resets that row's volume to 100%, including the System row and a
-currently-muted row (reset does not itself unmute — matches the "nudge
-unmutes first" precedent only for nudge, not reset, since a reset to 100%
-while still muted is a legitimate state a user can want).
+currently-muted row (reset unmutes the row first, then sets 100% — same
+"unmute on interaction" behavior as drag and nudge, matching the Windows
+mixer feel).
 
 ### Auto-hide
 

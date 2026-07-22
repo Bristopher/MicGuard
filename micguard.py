@@ -965,7 +965,7 @@ WM_APP_MIXER_ON, WM_APP_MIXER_OFF = 0x8001, 0x8002
 MIXER_KEYS = ([(100 + i, 0, 0x31 + i) for i in range(9)]           # 1..9
               + [(109, 0, 0x26), (110, 0, 0x28), (111, 0, 0x1B),   # up, down, esc
                  (112, 0, 0x25), (113, 0, 0x27), (114, 0, 0x4D),   # left, right, M
-                 (119, 0, 0x52)])                                   # R (reset to 100%)
+                 (119, 0, 0x52)])                                   # 119 = R (reset to 100%)
 
 # W/A/S/D — registered IN ADDITION to MIXER_KEYS, and ONLY while
 # cfg["mixer_nav"] == "wasd": grabbing a gamer's movement keys in any other
@@ -2645,9 +2645,11 @@ body{color:#fafafa;padding:0;user-select:none;overflow:hidden;
 <script>
 var MIX = {hoverSelect:true, drag:false, scroll:false};
 var dragging = false;
+var lastHover = -1;
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function setMixer(model){
+  lastHover = -1;
   document.getElementById('rows').innerHTML = model.rows.map((r, i) => {
     const pctHtml = r.pct === null
       ? `<span class="pct na">no audio</span>`
@@ -2695,10 +2697,11 @@ function barFracFrom(e){
 document.addEventListener('mousemove', e => {
   const i = rowIndexFrom(e);
   if(i === null) return;
-  if(MIX.hoverSelect){
+  if(MIX.hoverSelect && i !== lastHover){
     document.querySelectorAll('.row').forEach(r =>
       r.classList.toggle('sel', parseInt(r.dataset.i) === i));
     if(window.pywebview) pywebview.api.hover(i);   // sync Python selection
+    lastHover = i;
   }
   if(dragging && MIX.drag){
     const f = barFracFrom(e);
@@ -4351,15 +4354,16 @@ class App:
         self._start_mixer_meters()
 
     def _arm_mixer_timer(self):
-        if self._mixer_timer:
-            self._mixer_timer.cancel()
-            self._mixer_timer = None
-        delay = mixer_hide_delay(self.cfg)
-        if delay is None:
-            return  # mixer_timeout <= 0: popup stays until Esc / click-away / toggle
-        self._mixer_timer = threading.Timer(delay, self._hide_mixer)
-        self._mixer_timer.daemon = True
-        self._mixer_timer.start()
+        with self._mixer_lock:
+            if self._mixer_timer:
+                self._mixer_timer.cancel()
+                self._mixer_timer = None
+            delay = mixer_hide_delay(self.cfg)
+            if delay is None:
+                return  # mixer_timeout <= 0: popup stays until Esc / click-away / toggle
+            self._mixer_timer = threading.Timer(delay, self._hide_mixer)
+            self._mixer_timer.daemon = True
+            self._mixer_timer.start()
 
     def _start_mixer_meters(self):
         """20 Hz level-pulse pump; exists only while the mixer is visible.
