@@ -1,8 +1,8 @@
 # Device Priority Lists, Profiles, Fallback Alerts, Volume Hotkeys
 
-**Status:** ✅ Production (v1.5); mixer popup & boost added v1.6; nav modes/rolodex/pulse/mute added v1.7; profile-switch hotkeys added v1.9
+**Status:** ✅ Production (v1.5); mixer popup & boost added v1.6; nav modes/rolodex/pulse/mute added v1.7; profile-switch hotkeys added v1.9; mixer mouse input/R reset/auto-hide added v1.10
 **Author:** Bristopher (design), AI-assisted implementation
-**Date:** 2026-07-17 (v1.9 profile-switch hotkeys)
+**Date:** 2026-07-22 (v1.10 mixer mouse input, R reset, auto-hide)
 **Version:** 1.5.0 (mixer/boost/nav-rolodex-pulse-mute/profile-hotkeys code lands ahead of the tag — see RELEASING.md)
 
 ---
@@ -267,6 +267,59 @@ pulse — the pump has no meter reference for it — until the popup is closed
 and reopened. This trades a small staleness window for avoiding a QI-per-tick
 COM cost; revisit only if it proves confusing in practice.
 
+## Mixer mouse input, R reset, auto-hide (v1.10)
+
+The mixer popup gained real mouse interaction and an idle auto-close, gated
+behind four new settings — implemented as Tasks 1-6, task briefs/reports under
+`.superpowers/sdd/task-1-brief.md` through `task-6-report.md`.
+
+### Settings
+
+| Key | Default | Settings UI (mixer section) | State key |
+|---|---|---|---|
+| `mixer_timeout` | `6` | Number input "Mixer auto-hide" (seconds, 0-3600; `0` = stay open) | `mixerTimeout` |
+| `mixer_hover_select` | `True` | Switch "Highlight mixer row on hover" | `mixerHoverSelect` |
+| `mixer_drag` | `True` | Switch "Drag mixer bars to set volume" | `mixerDrag` |
+| `mixer_scroll` | `False` | Switch "Scroll wheel over a mixer row to adjust" | `mixerScroll` |
+
+All four read live off `cfg` on every mixer open — no restart needed. `save()`
+coerces `mixer_timeout` to an int and clamps it `0..3600` (falling back to `6`
+on a bad value); the three flags are plain `bool(...)`.
+
+### js_api bridge (first no-activate popup taking real input)
+
+`MIXER_HTML` carries a `js_api` bridge with three handlers, each dispatched
+through the same `App._mixer_key`-style plumbing so a mouse action and a
+keypress converge on one code path:
+
+- **`hover(index)`** — when `mixer_hover_select` is on, moving the mouse over
+  a row selects it (same as pressing its digit/arrow), so `↑↓`/`R` then act
+  on the hovered row.
+- **`set_volume(index, pct)`** — when `mixer_drag` is on, click-dragging a
+  row's bar sets that channel's volume directly (not a relative nudge).
+  Dragging does not steal window focus — the popup stays no-activate the
+  whole time (see System-Conventions.md "Window styling system").
+- **`scroll(index, delta)`** — when `mixer_scroll` is on (off by default),
+  scrolling while hovering a row nudges its volume ±2% per notch, same step
+  size as the keyboard nudge. LIVE-CONFIRMED 2026-07-22 on the real
+  no-activate popup: the native WebView2 wheel event reaches `js_api`
+  directly, no keyboard-hook or extra plumbing needed.
+
+### R — reset to 100%
+
+`MIXER_KEYS` gained `R` (0x52, id 115) alongside the existing ephemeral keys
+(see System-Conventions.md "Hotkey manager" row): pressing `R` while a row is
+selected resets that row's volume to 100%, including the System row and a
+currently-muted row (reset does not itself unmute — matches the "nudge
+unmutes first" precedent only for nudge, not reset, since a reset to 100%
+while still muted is a legitimate state a user can want).
+
+### Auto-hide
+
+The mixer popup now arms a `mixer_timeout`-second idle timer on open/refresh
+(reset on any key/mouse activity); at `0` it never arms and the popup only
+closes on `Esc` or click-away, matching pre-v1.10 behavior exactly.
+
 ## Profile-switch hotkeys (v1.9)
 
 A hotkey binding's `target` can now select a profile instead of nudging
@@ -485,7 +538,8 @@ Schema, migration mechanics, and the "which level does a new setting live at"
 recipe are documented in full in [Dynamic-Settings.md](../Dynamic-Settings.md)
 (§ "Config v2 shape" and § "Adding a new setting"). Summary of the new keys:
 `profiles`, `active_profile`, `notify_fallback`, `hotkeys.enabled`,
-`hotkeys.bindings[].{keys,target,step}`, (v1.7) `mixer_nav`, `mixer_meters`.
+`hotkeys.bindings[].{keys,target,step}`, (v1.7) `mixer_nav`, `mixer_meters`,
+(v1.10) `mixer_timeout`, `mixer_hover_select`, `mixer_drag`, `mixer_scroll`.
 `enforce` is unchanged in meaning (global switch, now covers both flows).
 
 ## Testing

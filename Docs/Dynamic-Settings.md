@@ -1,7 +1,7 @@
 # Dynamic Settings — MicGuard's config mechanism
 
 **Status:** ✅ Current
-**Last Updated:** 2026-07-13
+**Last Updated:** 2026-07-22
 
 > Check this doc before adding ANY setting.
 
@@ -14,7 +14,8 @@ permanent shape adapter that runs before the merge:
   `save_config()` in `micguard.py`.
 - **Defaults:** the `DEFAULT_CONFIG` dict at the top of `micguard.py`:
   `profiles`, `active_profile`, `enforce`, `notify_fallback`, `hotkeys`,
-  `run_at_startup`, `check_updates`, `mixer_nav`, `mixer_meters`.
+  `run_at_startup`, `check_updates`, `mixer_nav`, `mixer_meters`,
+  `mixer_timeout`, `mixer_hover_select`, `mixer_drag`, `mixer_scroll`.
 - **Precedence:** file value > `DEFAULT_CONFIG` default, applied in
   `load_config()` via `DEFAULT_CONFIG | migrate_config(json.load(f))`. A
   missing/corrupt file returns `None`, which triggers the first-run path (mic
@@ -114,6 +115,10 @@ predate this key.
 | `check_updates` | `true` | Check GitHub releases on launch | App (on launch) |
 | `mixer_nav` | `"digits"` | How Shift+F3 popup’s keys work: `"digits"` (1-9 pick, ↑↓ volume), `"arrows"` (↑↓ pick, ←→ volume), or `"wasd"` (W/S pick, A/D volume — arrows work too; W/A/S/D only globally grabbed in this mode, popup-open only) | Mixer (live) |
 | `mixer_meters` | `true` | Live level pulse on mixer bars (polls while popup open) | Mixer (live) |
+| `mixer_timeout` | `6` | Seconds before the mixer popup auto-closes itself; `0` = stay open until Esc or click-away (0-3600, clamped on save) | Mixer (live) |
+| `mixer_hover_select` | `true` | Moving the mouse over a mixer row selects it, so keyboard nav/R act on it | Mixer (live, js_api `hover`) |
+| `mixer_drag` | `true` | Click-and-drag a row's bar to set that channel's volume | Mixer (live, js_api `set_volume`) |
+| `mixer_scroll` | `false` | Scroll wheel over a hovered row nudges its volume ±2% | Mixer (live, js_api `scroll`) |
 
 ## Adding a new setting — exact steps
 

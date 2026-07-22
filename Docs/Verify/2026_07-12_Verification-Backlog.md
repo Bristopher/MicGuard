@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-22 08:45 — §18.4 added: v1.10.3 rollout watch item (one-off PyInstaller extraction failure on first post-update launch; exe verified byte-identical, relaunch clean)
+**Updated:** 2026-07-22 — §19 added: v1.10 mixer mouse input (hover/drag/scroll), R reset, auto-hide timeout — settings UI shipped, manual-verify items listed
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -679,6 +679,44 @@ removed from the ctypes import (pycaw itself already used the safe
    right after updating but works when reopened", this is it — and if it
    recurs, the fix direction is a one-shot retry/relaunch guard in
    `apply_update`'s relaunch path.
+
+## 19. v1.10 mixer mouse input, R reset, auto-hide (2026-07-22, ~5 min)
+
+**Shipped:** `55a2462..HEAD` (2026-07-22, Tasks 1-6) — the mixer popup gains a
+`js_api` bridge for hover-select, click-drag-to-set, and scroll-to-nudge; an
+`R` ephemeral key that resets the selected row to 100%; and a `mixer_timeout`
+idle auto-close. Four new settings rows ship in this task (`mixer_timeout`,
+`mixer_hover_select`, `mixer_drag`, `mixer_scroll`) — see
+[Features/Device-Priority-Profiles-Hotkeys.md](../Features/Device-Priority-Profiles-Hotkeys.md#mixer-mouse-input-r-reset-auto-hide-v110).
+**Machine-verified:** 141 pytest green; `uv run python -c "import micguard"`
+clean; hover-select and scroll ±2% LIVE-CONFIRMED 2026-07-22 on the real
+no-activate popup (native WebView2 wheel path reaches `js_api` directly, no
+hook needed).
+
+1. **Hover-select:** with the "Highlight mixer row on hover" switch on, move
+   the mouse over different rows in the Shift+F3 popup without clicking —
+   each one should highlight/select as the cursor passes over it, and
+   ↑↓/R should then act on whichever row is currently hovered.
+2. **Drag-to-set volume:** with "Drag mixer bars to set volume" on, click and
+   drag a row's bar left/right — the volume should track the drag position
+   directly (not a relative nudge). Do this while a borderless/fullscreen
+   game has focus: confirm the game does NOT lose focus/pause during the
+   drag (the no-activate guarantee).
+3. **Scroll to adjust:** turn on "Scroll wheel over a mixer row to adjust"
+   (off by default) — hover a row and scroll; each notch should nudge ±2%,
+   matching the keyboard nudge step. Confirm it's really off by default on a
+   fresh install/config.
+4. **R reset:** select a row (any method) and press `R` — it snaps to 100%.
+   Check specifically: the System row, and a currently-muted row (should
+   reset to 100% while remaining muted — reset does not auto-unmute).
+5. **Auto-hide timeout:** in Settings, try `0` (popup stays open until Esc or
+   click-away — old behavior), `3`, and `6` (default) — confirm the popup
+   closes itself after that many idle seconds, and that any key/mouse
+   activity resets the idle clock rather than closing early.
+6. **Held-hotkey-during-drag lock:** start a click-drag on a mixer bar, then
+   (without releasing the mouse) try a mixer hotkey (digit/arrow) — confirm
+   the drag doesn't get corrupted/interrupted and the two don't fight each
+   other for the row's volume.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

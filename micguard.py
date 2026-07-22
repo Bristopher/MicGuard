@@ -1790,6 +1790,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
        border-radius:50%;background:#fafafa;box-shadow:0 1px 3px rgba(0,0,0,.5);cursor:pointer}
 hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .switchrow{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:9px 0}
+.numin{width:60px;background:#18181b;border:1px solid #27272a;border-radius:6px;
+       color:#fafafa;font:600 12px Consolas,monospace;padding:4px 6px;text-align:right}
 .switchrow .lab{font-size:13.5px;font-weight:500}
 .switchrow .hint{font-size:12px;color:#71717a;margin-top:1px}
 .switch{position:relative;width:38px;height:22px;flex:none;margin:0}
@@ -1906,6 +1908,30 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
        <div class="hint">Each row's bar dances with that app's real-time audio (only polls while the popup is open)</div></div>
   <label class="switch"><input type="checkbox" id="sw_mixmeters"
     onchange="S && (S.mixerMeters = this.checked)"><span class="knob"></span></label>
+</div>
+<div class="switchrow">
+  <div><div class="lab">Mixer auto-hide</div>
+       <div class="hint">Seconds before the popup closes itself &middot; 0 = stay open until Esc or you click away</div></div>
+  <input type="number" id="mixtimeout" min="0" max="3600" class="numin"
+    oninput="S && (S.mixerTimeout = parseInt(this.value)||0)">
+</div>
+<div class="switchrow">
+  <div><div class="lab">Highlight mixer row on hover</div>
+       <div class="hint">Moving the mouse over a row selects it (so &#8593;&#8595;/R act on it)</div></div>
+  <label class="switch"><input type="checkbox" id="sw_mixhover"
+    onchange="S && (S.mixerHoverSelect = this.checked)"><span class="knob"></span></label>
+</div>
+<div class="switchrow">
+  <div><div class="lab">Drag mixer bars to set volume</div>
+       <div class="hint">Click and drag a row's bar to set that channel's volume</div></div>
+  <label class="switch"><input type="checkbox" id="sw_mixdrag"
+    onchange="S && (S.mixerDrag = this.checked)"><span class="knob"></span></label>
+</div>
+<div class="switchrow">
+  <div><div class="lab">Scroll wheel over a mixer row to adjust</div>
+       <div class="hint">Hover a row and scroll to nudge its volume &middot; off by default</div></div>
+  <label class="switch"><input type="checkbox" id="sw_mixscroll"
+    onchange="S && (S.mixerScroll = this.checked)"><span class="knob"></span></label>
 </div>
 <div class="switchrow">
   <div><div class="lab">Popups over fullscreen games</div>
@@ -2234,6 +2260,10 @@ function renderHk(){
   document.getElementById('sw_hotkeys').checked = !!S.hotkeys.enabled;
   document.getElementById('mixnav').value = S.mixerNav || 'digits';
   document.getElementById('sw_mixmeters').checked = S.mixerMeters !== false;
+  document.getElementById('mixtimeout').value = (S.mixerTimeout ?? 6);
+  document.getElementById('sw_mixhover').checked = S.mixerHoverSelect !== false;
+  document.getElementById('sw_mixdrag').checked = S.mixerDrag !== false;
+  document.getElementById('sw_mixscroll').checked = !!S.mixerScroll;
   document.getElementById('fspop').value = S.fullscreenPopups || 'auto';
 }
 // combo capture: focus the field and press keys; Escape clears
@@ -2390,6 +2420,10 @@ async function save(){
     notifyFallback: document.getElementById('sw_fallback').checked,
     mixerNav: document.getElementById('mixnav').value,
     mixerMeters: document.getElementById('sw_mixmeters').checked,
+    mixerTimeout: parseInt(document.getElementById('mixtimeout').value) || 0,
+    mixerHoverSelect: document.getElementById('sw_mixhover').checked,
+    mixerDrag: document.getElementById('sw_mixdrag').checked,
+    mixerScroll: document.getElementById('sw_mixscroll').checked,
     fullscreenPopups: document.getElementById('fspop').value,
     micEq: S.micEq,
   });
@@ -3279,6 +3313,10 @@ class App:
                     "notifyFallback": bool(app.cfg["notify_fallback"]),
                     "mixerNav": app.cfg.get("mixer_nav", "digits"),
                     "mixerMeters": bool(app.cfg.get("mixer_meters", True)),
+                    "mixerTimeout": int(app.cfg.get("mixer_timeout", 6)),
+                    "mixerHoverSelect": bool(app.cfg.get("mixer_hover_select", True)),
+                    "mixerDrag": bool(app.cfg.get("mixer_drag", True)),
+                    "mixerScroll": bool(app.cfg.get("mixer_scroll", False)),
                     "fullscreenPopups": app.cfg.get("fullscreen_popups", "auto"),
                     "micEq": app._mic_eq_state(sel),
                     "version": VERSION,
@@ -3435,6 +3473,14 @@ class App:
                 app.cfg["mixer_nav"] = (nav if nav in ("digits", "arrows", "wasd")
                                         else "digits")
                 app.cfg["mixer_meters"] = bool(state.get("mixerMeters", True))
+                try:
+                    mto = int(state.get("mixerTimeout", 6))
+                except (TypeError, ValueError):
+                    mto = 6
+                app.cfg["mixer_timeout"] = max(0, min(3600, mto))
+                app.cfg["mixer_hover_select"] = bool(state.get("mixerHoverSelect", True))
+                app.cfg["mixer_drag"] = bool(state.get("mixerDrag", True))
+                app.cfg["mixer_scroll"] = bool(state.get("mixerScroll", False))
                 fsp = state.get("fullscreenPopups")
                 app.cfg["fullscreen_popups"] = (fsp if fsp in ("auto", "other", "off")
                                                 else "auto")
