@@ -4211,7 +4211,11 @@ class App:
     def _arm_mixer_timer(self):
         if self._mixer_timer:
             self._mixer_timer.cancel()
-        self._mixer_timer = threading.Timer(6.0, self._hide_mixer)
+            self._mixer_timer = None
+        delay = mixer_hide_delay(self.cfg)
+        if delay is None:
+            return  # mixer_timeout <= 0: popup stays until Esc / click-away / toggle
+        self._mixer_timer = threading.Timer(delay, self._hide_mixer)
         self._mixer_timer.daemon = True
         self._mixer_timer.start()
 
