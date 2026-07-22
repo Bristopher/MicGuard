@@ -295,6 +295,10 @@ class TestMixerKeyAction(unittest.TestCase):
     def test_unknown_key_inert(self):
         self.assertIsNone(m.mixer_key_action("digits", "f5"))
 
+    def test_r_resets_in_every_nav(self):
+        for nav in ("digits", "arrows", "wasd", "bogus"):
+            self.assertEqual(m.mixer_key_action(nav, "r"), ("reset", 0))
+
 
 class TestRolodexRows(unittest.TestCase):
     BINDINGS = [{"keys": "ctrl+up", "target": "system", "step": 2},
@@ -943,3 +947,40 @@ class TestWebviewTeardownPending(unittest.TestCase):
     def test_empty_snapshot_is_clear(self):
         self.assertFalse(m.webview_teardown_pending([], keep=set(),
                                                     cmdline_of=self._cmd({})))
+
+
+class TestMixerInput(unittest.TestCase):
+    def test_bar_x_to_pct_left_edge_is_zero(self):
+        self.assertEqual(m.bar_x_to_pct(0.0), 0)
+
+    def test_bar_x_to_pct_three_quarter_mark_is_100(self):
+        self.assertEqual(m.bar_x_to_pct(0.75), 100)
+
+    def test_bar_x_to_pct_right_quarter_clamps_to_100(self):
+        self.assertEqual(m.bar_x_to_pct(0.9), 100)
+        self.assertEqual(m.bar_x_to_pct(1.0), 100)
+
+    def test_bar_x_to_pct_half_of_track(self):
+        # 0.375 / 0.75 = 0.5 -> 50%
+        self.assertEqual(m.bar_x_to_pct(0.375), 50)
+
+    def test_bar_x_to_pct_clamps_negative(self):
+        self.assertEqual(m.bar_x_to_pct(-0.2), 0)
+
+    def test_hide_delay_default_is_six(self):
+        self.assertEqual(m.mixer_hide_delay({"mixer_timeout": 6}), 6.0)
+
+    def test_hide_delay_zero_means_never(self):
+        self.assertIsNone(m.mixer_hide_delay({"mixer_timeout": 0}))
+
+    def test_hide_delay_negative_means_never(self):
+        self.assertIsNone(m.mixer_hide_delay({"mixer_timeout": -3}))
+
+    def test_hide_delay_missing_key_defaults_six(self):
+        self.assertEqual(m.mixer_hide_delay({}), 6.0)
+
+    def test_new_config_defaults(self):
+        self.assertEqual(m.DEFAULT_CONFIG["mixer_timeout"], 6)
+        self.assertIs(m.DEFAULT_CONFIG["mixer_hover_select"], True)
+        self.assertIs(m.DEFAULT_CONFIG["mixer_drag"], True)
+        self.assertIs(m.DEFAULT_CONFIG["mixer_scroll"], False)

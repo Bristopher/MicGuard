@@ -61,6 +61,10 @@ DEFAULT_CONFIG = {
     },
     "mixer_nav": "digits",     # "digits" (1-9 pick, up/down nudge) | "arrows" (up/down pick, left/right nudge)
     "mixer_meters": True,      # live level pulse on the mixer bars
+    "mixer_timeout": 6,        # mixer auto-hide seconds; 0 (or less) = never auto-hide
+    "mixer_hover_select": True,  # cursor over a mixer row selects/highlights it
+    "mixer_drag": True,        # click/drag a mixer bar to set that row's volume
+    "mixer_scroll": False,     # wheel over a mixer row adjusts its volume (default off)
     # popups over exclusive-fullscreen games: "auto" tries the game's own
     # monitor first and learns per-exe failures (spec 2026-07-16);
     # "other" = always the game-free monitor; "off" = suppress
@@ -918,6 +922,8 @@ def mixer_key_action(nav: str, key: str) -> tuple[str, int] | None:
         return ("close", 0)
     if key == "m":
         return ("mute", 0)
+    if key == "r":
+        return ("reset", 0)
     if key.isdigit() and key != "0":
         return ("select", int(key) - 1)
     if nav == "wasd":
@@ -929,6 +935,24 @@ def mixer_key_action(nav: str, key: str) -> tuple[str, int] | None:
         return {"up": ("move", -1), "down": ("move", 1),
                 "left": ("nudge", -2), "right": ("nudge", 2)}.get(key)
     return {"up": ("nudge", 2), "down": ("nudge", -2)}.get(key)
+
+
+def bar_x_to_pct(x_frac: float) -> int:
+    """PURE: map a click/drag position (0..1 of the mixer bar's width) to a
+    volume percent. The bar renders 100% at 3/4 width (the last quarter is the
+    boost overlay zone), so volume = x/0.75, clamped 0..100 — the boost zone is
+    intentionally unreachable by mouse (keyboard/scroll only)."""
+    return max(0, min(100, round(x_frac / 0.75 * 100)))
+
+
+def mixer_hide_delay(cfg: dict) -> float | None:
+    """PURE: seconds to arm the mixer auto-hide timer, or None when it must
+    never auto-hide (cfg['mixer_timeout'] <= 0)."""
+    try:
+        t = float(cfg.get("mixer_timeout", 6))
+    except (TypeError, ValueError):
+        t = 6.0
+    return t if t > 0 else None
 
 
 # Thread messages App posts to the hotkey loop to register/unregister the
