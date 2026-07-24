@@ -157,8 +157,10 @@ $setupSrc = Join-Path $outDir "com.cbuzi.micguard-win-Setup.exe"
 $setupDst = Join-Path $outDir "MicGuard_${new}_x64-setup.exe"
 if (Test-Path $setupSrc) { Rename-Item $setupSrc $setupDst -Force }
 
-$portableSrc = Join-Path $outDir "com.cbuzi.micguard-win-Portable.exe"
-$portableDst = Join-Path $outDir "MicGuard_${new}_x64-Portable.exe"
+# vpk emits the portable bundle as a .zip for an onedir app (it's a zipped
+# folder, not a single exe) - verified from a real `vpk pack` smoke build.
+$portableSrc = Join-Path $outDir "com.cbuzi.micguard-win-Portable.zip"
+$portableDst = Join-Path $outDir "MicGuard_${new}_x64-Portable.zip"
 if (Test-Path $portableSrc) { Rename-Item $portableSrc $portableDst -Force }
 
 Write-Host "  Packaged -> $outDir"
@@ -192,7 +194,7 @@ $assets = Get-ChildItem $outDir -File | Where-Object {
     $_.Name -like "MicGuard_*"
 } | ForEach-Object { $_.FullName }
 
-gh release create "v$new" @assets --title "MicGuard v$new" --notes $Notes
+gh release create "v$new" @assets --repo $GithubRepo --title "MicGuard v$new" --notes $Notes
 if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
 
 Write-Host ""
