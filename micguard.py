@@ -1505,58 +1505,6 @@ def unregister_uninstall_entry() -> None:
         log.warning("could not remove Add/Remove entry: %s", e)
 
 
-def parse_version(tag: str):
-    return tuple(int(p) for p in tag.lstrip("vV").split(".") if p.isdigit())
-
-
-def fetch_latest_release():
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-    req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.load(resp)
-
-
-def apply_update(release: dict) -> bool:
-    """Download the new exe and swap it in. Frozen only.
-
-    Uses the rename-swap technique: Windows allows RENAMING a running exe
-    (just not overwriting it), so we rename ourselves aside, move the new exe
-    into our path, and start it. The previous trampoline-bat approach copied
-    over the exe and raced the PyInstaller bootstrap ("Failed to load Python
-    DLL ..._MEI..." on the user's first real update, 2026-07-12). The .old
-    file is cleaned up by the new process once we have fully exited."""
-    asset = next(
-        (a for a in release.get("assets", []) if a["name"].lower().endswith(".exe")),
-        None,
-    )
-    if not asset or not IS_FROZEN:
-        return False
-    new_exe = os.path.join(CONFIG_DIR, "MicGuard.new.exe")
-    req = urllib.request.Request(
-        asset["browser_download_url"], headers={"User-Agent": APP_NAME}
-    )
-    with urllib.request.urlopen(req, timeout=120) as resp, open(new_exe, "wb") as f:
-        shutil.copyfileobj(resp, f)
-    if os.path.getsize(new_exe) < 5_000_000:
-        raise RuntimeError("downloaded exe is suspiciously small — refusing to install it")
-    current = sys.executable
-    old = current + ".old"
-    try:
-        if os.path.exists(old):
-            os.remove(old)
-    except OSError:
-        pass
-    os.rename(current, old)
-    try:
-        shutil.move(new_exe, current)
-    except OSError:
-        os.rename(old, current)  # roll back so the install is never left broken
-        raise
-    # --updated: the new process waits for our singleton mutex to clear
-    subprocess.Popen([current, "--updated"], close_fds=True)
-    return True
-
-
 def uninstall_self() -> None:
     set_run_at_startup(False)
     unregister_uninstall_entry()
@@ -1988,6 +1936,8 @@ async function checkUpd(){
     card.style.display = 'block';
   } else if (r && r.status === 'uptodate'){
     m.style.color = '#22c55e'; m.textContent = `You're on the latest version (v${r.current})`;
+  } else if (r && r.status === 'source'){
+    m.style.color = '#a1a1aa'; m.textContent = 'This build updates through its installer — grab the latest release from GitHub.';
   } else {
     m.style.color = '#f59e0b';
     m.textContent = (r && r.msg) || 'Update check failed';
@@ -3061,49 +3011,55 @@ class App:
     def _manual_update_check(self):
         self._update_check(quiet=False)
 
-    def _update_check(self, quiet: bool) -> str:
-        """Never updates on its own: finds a newer release, asks the user,
-        and if installing fails points them at the release page instead.
-        Returns a short status string so inline callers (the settings
-        window's "check now" link) can show the outcome without a toast."""
+    def _velopack_apply(self, mgr: "velopack.UpdateManager", info: "velopack.UpdateInfo") -> bool:
+        """Download + apply a Velopack update and restart. Shared by the
+        dialog-driven flow (_update_check) and the settings window's
+        install_update — the actual download/apply block lives here once so
+        neither call site duplicates it. Returns False (and fails open to the
+        releases page) on any error; apply_updates_and_restart does not
+        return on success (the process restarts)."""
         try:
-            release = fetch_latest_release()
-            latest = parse_version(release.get("tag_name", ""))
+            mgr.download_updates(info)
+            mgr.apply_updates_and_restart(info)
+            return True
+        except Exception as e:
+            log.warning("update failed: %s", e)
+            self._dialog("info",
+                         "The update could not be installed automatically.\n\n"
+                         f"Opening the releases page:\n{RELEASES_URL}")
+            webbrowser.open(RELEASES_URL)
+            return False
+
+    def _update_check(self, quiet: bool) -> str:
+        """Velopack update: check → consent → download → apply+restart. Never
+        updates without the user's yes; any failure falls back to opening the
+        releases page. Returns a short status string for inline callers."""
+        if not is_velopack_installed():
+            # source / portable-dev: no in-place Velopack update
+            if not quiet:
+                self._dialog("info", "This build updates through its installer.\n\n"
+                                     "Opening the releases page.")
+                webbrowser.open(RELEASES_URL)
+            return "Not an installed build"
+        try:
+            mgr = velopack.UpdateManager(update_feed_url())
+            info = mgr.check_for_updates()
         except Exception as e:
             log.info("update check failed: %s", e)
             if not quiet:
                 self._notify("Update check failed (offline?)")
             return "Update check failed (offline?)"
-        if not latest or latest <= parse_version(VERSION):
+        if not info:
             if not quiet:
                 self._notify(f"Up to date (v{VERSION})")
             return f"Up to date (v{VERSION})"
-        tag = release.get("tag_name")
         if not self._dialog(
             "askyesno",
-            f"{APP_NAME} {tag} is available (you have v{VERSION}).\n\n"
+            f"A MicGuard update is available (you have v{VERSION}).\n\n"
             "Update now? MicGuard will restart itself.",
         ):
             return ""
-        if not IS_FROZEN:
-            self._dialog("info", "Running from source — update with git pull.\n\n"
-                                 "Opening the release page.")
-            webbrowser.open(RELEASES_URL)
-            return ""
-        try:
-            if not apply_update(release):
-                raise RuntimeError("release has no .exe asset")
-            self._quit()
-        except Exception as e:
-            log.warning("update failed: %s", e)
-            self._dialog(
-                "info",
-                "The update could not be installed automatically.\n\n"
-                f"Download it yourself from:\n{RELEASES_URL}\n\n"
-                "Opening that page now — quit MicGuard, then replace your "
-                "MicGuard.exe with the downloaded one and run it.",
-            )
-            webbrowser.open(RELEASES_URL)
+        self._velopack_apply(mgr, info)
         return ""
 
     def _setup_mic_eq(self) -> dict:
@@ -3464,47 +3420,38 @@ class App:
                 """Version-context check for the settings row — no dialog.
                 A found update is cached on the app; install_update consumes
                 it (the "Update & restart" click is the user's consent)."""
+                if not is_velopack_installed():
+                    return {"status": "source", "current": VERSION}
                 try:
-                    release = fetch_latest_release()
+                    mgr = velopack.UpdateManager(update_feed_url())
+                    info = mgr.check_for_updates()
                 except Exception as e:
                     log.info("update check failed: %s", e)
                     return {"status": "error",
                             "msg": "Update check failed (offline?)"}
-                latest = parse_version(release.get("tag_name", ""))
-                if not latest or latest <= parse_version(VERSION):
-                    app._pending_release = None
+                if not info:
+                    app._pending_update = None
                     return {"status": "uptodate", "current": VERSION}
-                app._pending_release = release
-                notes = (release.get("body") or "").strip()
+                app._pending_update = (mgr, info)
+                notes = (info.TargetFullRelease.NotesMarkdown or "").strip()
                 if len(notes) > 600:
                     notes = notes[:600].rstrip() + "…"
                 return {"status": "update", "current": VERSION,
-                        "latest": release.get("tag_name", "").lstrip("vV"),
+                        "latest": info.TargetFullRelease.Version,
                         "notes": notes, "frozen": IS_FROZEN}
 
             def install_update(self_api):
-                """One-click install of the release update_info found, then
+                """One-click install of the update update_info found, then
                 restart. Failure falls back to opening the releases page
                 (same fail-open rule as the dialog flow)."""
-                release = getattr(app, "_pending_release", None)
-                if not release:
+                pending = getattr(app, "_pending_update", None)
+                if not pending:
                     return {"ok": False, "msg": "Check for updates first"}
-                if not IS_FROZEN:
-                    webbrowser.open(RELEASES_URL)
-                    return {"ok": False,
-                            "msg": "Running from source — update with git pull"}
-                try:
-                    if not apply_update(release):
-                        raise RuntimeError("release has no .exe asset")
-                except Exception as e:
-                    log.warning("update failed: %s", e)
-                    webbrowser.open(RELEASES_URL)
+                mgr, info = pending
+                app._pending_update = None
+                if not app._velopack_apply(mgr, info):
                     return {"ok": False,
                             "msg": "Update failed — opened the release page"}
-                app._pending_release = None
-                # quit off this webview worker thread; the new exe relaunches
-                # itself via --updated once our mutex clears
-                threading.Thread(target=app._quit, daemon=True).start()
                 return {"ok": True}
 
             def setup_eq(self_api):
