@@ -9,6 +9,7 @@ dependencies = [
     "pystray>=0.19",
     "pillow>=10",
     "pywebview>=6.2.1",
+    "velopack>=1.2.0",
 ]
 
 [dependency-groups]

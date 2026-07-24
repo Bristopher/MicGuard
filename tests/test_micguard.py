@@ -985,3 +985,24 @@ class TestMixerInput(unittest.TestCase):
         self.assertIs(m.DEFAULT_CONFIG["mixer_hover_select"], True)
         self.assertIs(m.DEFAULT_CONFIG["mixer_drag"], True)
         self.assertIs(m.DEFAULT_CONFIG["mixer_scroll"], False)
+
+
+class VelopackHelpersTests(unittest.TestCase):
+    def test_feed_url_points_at_github_latest_download(self):
+        self.assertEqual(
+            m.update_feed_url(),
+            "https://github.com/Bristopher/MicGuard/releases/latest/download/")
+
+    def test_installed_exe_stub_is_packid_root_plus_exe(self):
+        import os
+        self.assertEqual(
+            m.installed_exe_stub(),
+            os.path.join(m.VELOPACK_DIR, "MicGuard.exe"))
+
+    def test_stub_is_not_the_current_subfolder(self):
+        # the stub lives at the packId ROOT, never inside current\
+        self.assertNotIn("current",
+                         m.installed_exe_stub().lower().split(os.sep))
+
+    def test_pack_id_is_stable(self):
+        self.assertEqual(m.PACK_ID, "com.cbuzi.micguard")

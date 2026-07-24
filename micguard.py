@@ -36,6 +36,16 @@ WATCHDOG_SECONDS = 15  # safety net; real work is event-driven
 VOLUME_EPSILON = 0.005
 RECOMMENDED_VOLUME = 85  # the AT2020 sweet spot — "Use recommended" in settings
 
+# Velopack identity — IMMUTABLE once shipped (installed apps update/locate by these)
+PACK_ID = "com.cbuzi.micguard"
+PACK_TITLE = APP_NAME          # "MicGuard"
+PACK_AUTHORS = "Bristopher"
+# GitHub rewrites releases/latest/download/<asset> to the newest release's asset
+UPDATE_FEED_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/"
+# Velopack install root: %LOCALAPPDATA%\com.cbuzi.micguard\ (current\ + Update.exe + stub)
+VELOPACK_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), PACK_ID)
+
 # UI: all windows are frameless pywebview (WebView2) windows styled by the
 # shadcn/zinc CSS tokens inside SETTINGS_HTML / DIALOG_HTML below. Green
 # (#22c55e) appears ONLY where it means "on/active" — never as decoration.
@@ -1419,6 +1429,32 @@ def set_run_at_startup(enabled: bool) -> None:
                 winreg.DeleteValue(key, APP_NAME)
             except FileNotFoundError:
                 pass
+
+
+def update_feed_url() -> str:
+    return UPDATE_FEED_URL
+
+
+def installed_exe_stub() -> str:
+    """The stable Velopack execution stub at the packId root
+    (%LOCALAPPDATA%\\com.cbuzi.micguard\\MicGuard.exe). Always points at the
+    latest current\\ — use it for the autostart Run key and any launch, NOT
+    sys.executable (which is …\\current\\MicGuard.exe and changes each update)."""
+    return os.path.join(VELOPACK_DIR, f"{APP_NAME}.exe")
+
+
+def is_velopack_installed() -> bool:
+    """True when running as an installed Velopack app — i.e. sys.executable is
+    inside the packId install dir. False from source and from the raw portable
+    exe. Update/uninstall/stub-autostart behavior gates on this."""
+    if not IS_FROZEN:
+        return False
+    try:
+        exe = os.path.normcase(os.path.abspath(sys.executable))
+        root = os.path.normcase(os.path.abspath(VELOPACK_DIR))
+        return exe.startswith(root + os.sep)
+    except Exception:
+        return False
 
 
 def uninstall_entry_values(exe: str, version: str, size_kb: int) -> dict:
