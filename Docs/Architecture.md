@@ -1,7 +1,7 @@
 # MicGuard — Architecture
 
-**Status:** ✅ Current — describes the shipped v1.8.0 app
-**Last Updated:** 2026-07-17
+**Status:** ✅ Current — describes the shipped v2.0.0 app
+**Last Updated:** 2026-07-23
 
 ## Overview
 
@@ -9,11 +9,17 @@ MicGuard is a single-process Windows tray app that pins default audio
 devices and their volumes. Windows and games (Black Ops 3 was the original
 offender) silently change both; MicGuard subscribes to Core Audio change
 events and re-asserts the configured state within ~50 ms (measured). It is
-deliberately tiny: **one source file (`micguard.py`, ~3,600 lines as of
-v1.8), stdlib + 5 runtime deps, compiled to a single unsigned exe** that
-friends run with zero setup. There is no server, no database, no installer,
-no Task Scheduler — a JSON config, a log file, and one `HKCU\...\Run`
-registry value.
+deliberately tiny: **one source file (`micguard.py`, ~4,500 lines as of
+v2.0), stdlib + 6 runtime deps, distributed as a Velopack-installed onedir
+bundle** that friends run with zero setup. There is no server, no database,
+no Task Scheduler — a JSON config outside the install dir, a log file, and
+one `HKCU\...\Run` registry value pointing at a stable install-root stub exe.
+**v2.0 (2026-07-23)** replaced the hand-rolled PyInstaller-onefile +
+urllib-rename-swap updater + self-registered Add/Remove entry with
+[Velopack](https://velopack.io) — a real installer (Setup + Portable exes),
+Start Menu/Windows Search registration, delta updates, and native Add/Remove
+uninstall, at the cost of no longer being a single portable exe. Full detail:
+[Features/Velopack-Install-Update.md](Features/Velopack-Install-Update.md).
 
 As of v1.5 (design: [superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md](superpowers/specs/2026-07-13-device-priority-profiles-hotkeys-design.md);
 plan: [superpowers/plans/2026-07-13-device-priority-profiles-hotkeys.md](superpowers/plans/2026-07-13-device-priority-profiles-hotkeys.md))
@@ -39,16 +45,17 @@ WASD mixer nav, and the stale-device-ID self-heal described below.
 | Set-default-device | `IPolicyConfig` COM interface, hand-declared in `micguard.py` | Windows has **no public API** to set the default audio device. This undocumented-but-stable-since-Win7 interface is what SoundSwitch/EarTrumpet use. Only `SetDefaultEndpoint` is called; earlier vtable slots are placeholder `COMMETHOD`s (slot *count* must stay exact — see Gotchas) |
 | Tray icon | **pystray** (+ **Pillow** to draw the shield-mic glyph) | De-facto standard, ctypes-based on Windows (no pywin32 dependency). Runs detached. Native Win32 tray menus can't be themed, so `_patch_tray_clicks` swaps pystray's `WM_NOTIFY` handler: left-click → Settings, right-click → the themed `MENU_HTML` webview menu at the cursor (auto-hides on blur). The native pystray menu definition stays as the fallback if the patch ever breaks on a pystray update |
 | Settings/dialog UI | **pywebview** (WebView2) — real HTML/CSS | The user rejected two native-toolkit designs (ttk, then CustomTkinter) — tkinter-family UIs were ruled out outright. pywebview renders frameless windows with actual shadcn/zinc CSS in Windows' built-in WebView2 for a few MB (vs ~200 MB for Electron), no Node/React build step. Templates live IN `micguard.py` (`SETTINGS_HTML`/`DIALOG_HTML`); JS↔Python via `js_api`. Frozen builds REQUIRE `--collect-all webview`; friends' PCs need the WebView2 runtime (ships with Win11/Edge) |
-| Config | JSON at `%APPDATA%\MicGuard\config.json` (stdlib `json`) | Human-readable, trivially merged with defaults on load |
-| Startup | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via stdlib `winreg` | Per-user, no admin, no Task Scheduler — an explicit product requirement |
-| Updates | GitHub Releases API via stdlib `urllib` | No `requests` dependency for one GET; latest-release tag compared to `VERSION` |
-| Packaging | **PyInstaller** `--onefile --noconsole`, driven by **uv** | Single `MicGuard.exe` (~19.6 MB) on the Releases page; `uv` manages the venv/lockfile per the standing tooling rule |
+| Config | JSON at `%APPDATA%\MicGuard\config.json` (stdlib `json`) | Human-readable, trivially merged with defaults on load; deliberately OUTSIDE the Velopack install dir so it survives updates/reinstalls |
+| Startup | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via stdlib `winreg`, pointing at the Velopack install-root stub `MicGuard.exe` | Per-user, no admin, no Task Scheduler — an explicit product requirement; the stub path (not `sys.executable`) survives updates since `current\` is replaced whole |
+| Install / Update / Uninstall | **Velopack** (`velopack` Python package + the `vpk` .NET CLI at build time) | Windows has no stdlib installer/updater story; Velopack gives real Setup/Portable exes, Start Menu + Windows Search registration, delta updates via `UpdateManager`, and Add/Remove Programs uninstall for free — replaced the v1.x hand-rolled urllib download + rename-swap trampoline + self-registered `HKCU\...\Uninstall` entry (v2.0, 2026-07-23). The one sanctioned non-stdlib dependency outside the UI exception (Rule 1) |
+| Packaging | **PyInstaller** `--onedir --noconsole`, packaged by **vpk pack**, driven by **uv** | `--onedir` bundle is what Velopack packages (onefile can't be delta-updated); `vpk` produces the Setup installer, Portable exe, and the delta-update feed (`releases.win.json`/`RELEASES`/`assets.win.json`/`*.nupkg`); `uv` manages the venv/lockfile per the standing tooling rule |
 
 **Deliberate non-picks** (vs [Preferred-Stack.md](Preferred-Stack.md)): no
-Pydantic/whenever/Tenacity/icecream. Every dependency inflates the onefile exe
-and this app has no timezone math, no schema boundary, and one retry-able
-network call. Stdlib-first is the rule here (see AI-Development-Guide Rule 1).
-`uv` + the handpicked-libraries rule apply in full.
+Pydantic/whenever/Tenacity/icecream. This app has no timezone math, no schema
+boundary, and one retry-able network call. Stdlib-first is still the rule for
+everything Velopack and pywebview don't already own (see
+AI-Development-Guide Rule 1). `uv` + the handpicked-libraries rule apply in
+full.
 
 ## Where things live
 
@@ -57,14 +64,14 @@ network call. Stdlib-first is the rule here (see AI-Development-Guide Rule 1).
 ├── micguard.py          # THE app — all source lives here on purpose
 ├── tests/test_micguard.py  # pytest suite for the pure logic (uv run pytest -q)
 ├── pyproject.toml       # uv project; version is MIRRORED here by release.ps1
-├── release.ps1          # one-command release: bump → build → tag → gh release
+├── release.ps1          # one-command release: bump → build onedir → vpk pack → tag → gh release
 ├── install-test.ps1     # TEST-BUILD path: build → install over %LOCALAPPDATA% → smoke
 ├── RELEASING.md         # how to ship a version (root, next to the script)
 ├── README.md            # user-facing install/what-it-does
 ├── assets/              # icon + the README settings screenshot
 ├── Docs/                # this docs tree (index: Auto-set-default-Microphone-vol-Main-Doc-Index.md)
-├── dist/MicGuard.exe    # build output (gitignored; uploaded to GitHub Releases)
-├── Releases/vX.Y.Z/     # versioned archive of every shipped exe (gitignored; written by release.ps1)
+├── dist/MicGuard/       # PyInstaller onedir build output (gitignored; input to vpk pack)
+├── Releases/vX.Y.Z/     # versioned archive of every shipped Setup/Portable exe + feed files (gitignored; written by release.ps1)
 └── .venv/               # uv-managed (gitignored)
 ```
 
@@ -75,8 +82,8 @@ Runtime footprint on a user's machine:
 | `%APPDATA%\MicGuard\config.json` | settings (see [Dynamic-Settings.md](Dynamic-Settings.md)) |
 | `%APPDATA%\MicGuard\micguard.log` | INFO-level log; the only debugging surface on a friend's PC |
 | `%APPDATA%\MicGuard\history.json` | notable-event history (v1.9) — capped at 500 entries, written by `HistoryRecorder`; not a settings file (see Dynamic-Settings.md) |
-| `%LOCALAPPDATA%\Programs\MicGuard\MicGuard.exe` | suggested install location (any path works) |
-| `HKCU\...\Run\MicGuard` | startup entry, only when the setting is on |
+| `%LOCALAPPDATA%\com.cbuzi.micguard\` | Velopack install root (v2.0) — `current\` (live app files, replaced whole on update), `Update.exe` (Velopack's updater/uninstaller), and a stable `MicGuard.exe` stub at the root that always points at `current\` |
+| `HKCU\...\Run\MicGuard` | startup entry, only when the setting is on — points at the install-root stub, not `current\MicGuard.exe` |
 
 ## Threads table (v1.9)
 
@@ -103,6 +110,10 @@ event callbacks → config/registry/update/uninstall helpers (incl.
 
 ```
 main()                                   [main thread]
+ ├─ velopack.App().on_restarted(_velopack_on_restarted).run()  — MUST run
+ │  FIRST, before the mutex check: Velopack may quit/restart the process to
+ │  run install/uninstall hooks or apply a pending update; wrapped in a broad
+ │  try/except so a source/dev run (no Velopack context) never crashes on it
  ├─ already_running()?  → exit (named mutex "Local\MicGuardSingleton")
  ├─ App() — first run: autodetect_device() picks the mic that is BOTH
  │          default + default-comms (fallback: multimedia default → first
@@ -229,22 +240,39 @@ The migration is idempotent and only touches the file on disk when
 `save_config()` next runs (e.g. any settings Save) — an unmodified v1.4
 install stays v1 shape on disk until then, which is correct and expected.
 
-**Update flow (user-consented, never silent):** on launch (if
-`check_updates`) and via tray → *Check for updates*: fetch
-`releases/latest` → newer tag? → **yes/no dialog**. Accept → download the
-`.exe` asset, then **rename-swap**: rename the running exe to `.old`
-(Windows allows renaming a running image, just not overwriting it), move the
-new exe into place, spawn it with `--updated` (which makes `already_running`
-wait up to 15 s for the old process's mutex), quit; the new process deletes
-the `.old`. NEVER go back to a copy-over-the-exe trampoline bat — that
-raced the PyInstaller onefile bootstrap and produced "Failed to load Python
-DLL ..._MEI..." on the first real user update (2026-07-12). Any failure →
-info dialog with the releases URL + `webbrowser.open` (a failed swap rolls
-the rename back). Version comparison is `parse_version` on
-`VERSION = "x.y.z"` — the single source of truth that `release.ps1` bumps.
+**Update flow (v2.0, Velopack — user-consented, never silent):** on launch
+(if `check_updates`) and via tray → *Check for updates*, gated by
+`is_velopack_installed()` (source/portable-dev builds have no in-place update
+target and fail open straight to the releases page): `velopack.UpdateManager(
+update_feed_url())` → `check_for_updates()` → newer version available? →
+**yes/no dialog**. Accept → `App._velopack_apply` runs
+`mgr.download_updates(info)` then `mgr.apply_updates_and_restart(info)` (the
+single shared implementation both the dialog flow and the Settings update row
+call into — never duplicated at a second call site); the process restarts
+itself on the new version. `_velopack_on_restarted` sleeps ~1 s on the
+post-restart callback so WebView2's helper processes finish tearing down
+before the first window tries to paint (replaces the old dynamic
+teardown-poll that existed for the rename-swap updater). Any failure at any
+step → info dialog with the releases URL + `webbrowser.open`. This entirely
+replaces the v1.x urllib-download + rename-swap trampoline (`.old` file
+juggling, `--updated` relaunch flag, `parse_version`/`fetch_latest_release`/
+`apply_update` — all removed in v2.0). Version comparison for "is an update
+available" is Velopack's own, driven by `VERSION = "x.y.z"` in `micguard.py`
+— still the single source of truth that `release.ps1` bumps and stamps into
+the `vpk pack --packVersion` at build time.
 
-**Uninstall flow:** tray → *Uninstall…* → confirm dialog → delete Run key +
-`%APPDATA%\MicGuard` → trampoline bat deletes the exe after exit.
+**Uninstall flow (v2.0):** tray → *Uninstall…* → confirm dialog →
+`set_run_at_startup(False)` → flush history → `shutil.rmtree(CONFIG_DIR)`
+(our data, outside the install dir) → `subprocess.Popen([Update.exe,
+"uninstall", "--silent"])` (Velopack's own uninstaller CLI — the `uninstall`
+subcommand, not a `--uninstall` flag; `--silent` suppresses ITS confirmation
+since MicGuard's dialog already got consent) → `App._quit`. Add/Remove
+Programs calls the same `Update.exe uninstall` entry point directly (no
+MicGuard code runs for that path) — Velopack self-registers the ARP entry at
+install time, so the old `register_uninstall_entry`/`uninstall_from_arp`/
+`UNINSTALL_KEY`/`--uninstall` CLI branch are all gone in v2.0. Both paths are
+no-ops on the install dir when running from source/portable (nothing was
+installed to remove); the confirm + config wipe still happen either way.
 
 **Popups vs exclusive-fullscreen games (v1.7 → v1.8):** every no-activate
 popup (mixer, OSD, fallback alert) places itself via
@@ -361,17 +389,26 @@ consent-first; nothing is installed silently. Full detail:
 - **No ruff config yet** — the standing Astral-toolchain preference applies,
   but `[tool.ruff]` hasn't been added to `pyproject.toml`.
 - **Test coverage is pure-function only.** `tests/test_micguard.py`
-  (pytest, `uv run pytest -q`, 88 tests as of v1.8) covers the COM-free and
-  hardware-free logic: `migrate_config`, `active_profile_lists`,
-  `pick_device`, `heal_stale_ids`, `parse_hotkey`, the mixer nav/viewport/
-  boost math (`mixer_key_action` incl. WASD), the EQ renderer/writer cores,
-  and `pick_popup_monitor`. Core Audio behavior (enforcement, fallback,
-  hotkey firing, the OSD/alert windows) still has no automated coverage;
-  it's verified live via the manual smoke commands in
-  [AI-Development-Guide.md](AI-Development-Guide.md) §6 plus the human
-  backlog in
+  (pytest, `uv run pytest -q`, 133 tests as of v2.0 — down from 141 pre-v2.0
+  since the old rename-swap-updater tests were removed along with the code
+  they covered) covers the COM-free and hardware-free logic: `migrate_config`,
+  `active_profile_lists`, `pick_device`, `heal_stale_ids`, `parse_hotkey`, the
+  mixer nav/viewport/boost math (`mixer_key_action` incl. WASD), the EQ
+  renderer/writer cores, `pick_popup_monitor`, and the Velopack identity
+  helpers (`update_feed_url`, `installed_exe_stub`, `is_velopack_installed`).
+  Core Audio behavior (enforcement, fallback, hotkey firing, the OSD/alert
+  windows) AND the entire Velopack install/update/uninstall flow still have
+  no automated coverage — the latter needs the real Velopack toolchain (a
+  built installer, a published feed) and can only be exercised by a live
+  install/update/uninstall pass; it's verified live via the manual smoke
+  commands in [AI-Development-Guide.md](AI-Development-Guide.md) §6 plus the
+  human backlog in
   [Verify/2026_07-12_Verification-Backlog.md](Verify/2026_07-12_Verification-Backlog.md).
   A fake-`AudioUtilities` seam is the natural next step if COM-level tests are
   ever added.
+- **`velopack.__version__` self-reports `0.0.0`** even though pip/uv report
+  the installed package as `1.2.0` — cosmetic only (confirmed the actual APIs
+  used are present and functional), noted here so it isn't mistaken for a
+  real version-resolution bug later.
 - The GitHub repo starts at the v1.0.0 rewrite (`4bda0ee`); anything older is
   untracked local-only history.

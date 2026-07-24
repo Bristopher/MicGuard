@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-22 — §19 added: v1.10 mixer mouse input (hover/drag/scroll), R reset, auto-hide timeout — settings UI shipped, manual-verify items listed
+**Updated:** 2026-07-23 — §20 added: v2.0.0 Velopack install/update/uninstall migration — code shipped (identity+helpers, App bootstrap, UpdateManager wiring, install/uninstall/Add-Remove + stub autostart, release.ps1 rewrite), manual-verify matrix listed (needs a real build + published release to exercise)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -717,6 +717,92 @@ hook needed).
    (without releasing the mouse) try a mixer hotkey (digit/arrow) — confirm
    the drag doesn't get corrupted/interrupted and the two don't fight each
    other for the row's volume.
+
+## 20. Velopack install/update/uninstall migration (v2.0.0, 2026-07-23, needs a real build + a published release — ~30 min across a real install/update/uninstall cycle)
+
+**Shipped:** `965050b`..`HEAD` (`965050b` = the prior v1.11.0 release commit;
+implementation commits `b5c8fca` identity+helpers → `11a2674` App bootstrap +
+old relaunch-machinery removal → `17b9419` UpdateManager wiring →
+`c725722` install/uninstall/Add-Remove + stub autostart → `a65b042`
+`release.ps1` rewrite — exact final SHA to be filled in at release), ship
+date 2026-07-23. Replaces the v1.x PyInstaller-onefile + urllib-download +
+rename-swap updater + self-registered Add/Remove entry with
+[Velopack](https://velopack.io): a real Setup installer, a Portable exe,
+Start Menu/Windows Search registration, delta updates via
+`velopack.UpdateManager`, and native Add/Remove Programs uninstall via
+`Update.exe uninstall`. Also fixes a latent bug: `App._uninstall` was
+referenced by the tray menu but undefined on the v1.11.0 base — it's defined
+in this change. Full detail:
+[Features/Velopack-Install-Update.md](../Features/Velopack-Install-Update.md).
+Design: [superpowers/specs/2026-07-23-velopack-installer-migration-design.md](../superpowers/specs/2026-07-23-velopack-installer-migration-design.md).
+Plan: [superpowers/plans/2026-07-23-velopack-installer-migration.md](../superpowers/plans/2026-07-23-velopack-installer-migration.md).
+
+**Machine-verified:** `uv run pytest -q` — 133/133 green (`VelopackHelpersTests`
+covers `update_feed_url`/`installed_exe_stub`/`is_velopack_installed` across
+frozen/not-frozen and inside/outside-install-dir cases; pytest count dropped
+from 141→133 as the old rename-swap-updater tests were removed along with the
+code they covered); `uv run python -c "import micguard"` clean at every task
+boundary. **Everything beyond that is genuinely unverifiable without the real
+Velopack toolchain, a built installer, and a published release** — this is
+called out explicitly, not hidden: the entire install/update/uninstall/
+autostart surface needs a live pass.
+
+**MANUAL — the full matrix, all needed before this is considered done:**
+
+1. **Build.** `pyinstaller --onedir` + `vpk pack` succeeds locally (needs the
+   .NET SDK + the `vpk` CLI — `release.ps1` auto-installs `vpk` on first run).
+   Run `.\release.ps1` end-to-end for a real version and confirm it produces
+   a Setup exe, a Portable exe, and the delta-update feed files
+   (`releases.win.json`/`RELEASES`/`assets.win.json`/`*.nupkg`) in
+   `Releases\v<ver>\`.
+2. **Install.** Run the produced `Setup.exe` — confirm it installs to
+   `%LOCALAPPDATA%\com.cbuzi.micguard`, **a Start Menu entry AND a Windows
+   Search entry appear** (type "MicGuard" in Start, confirm it shows up),
+   the app launches, and once running: tray icon works, enforcement holds
+   (sabotage test — set volume to 47%, confirm sub-second restore), the
+   Shift+F3 mixer opens and works, and Settings opens and works.
+3. **Config preserved.** After install, confirm `%APPDATA%\MicGuard`'s
+   existing `config.json` (profiles, hotkeys, Mic EQ, etc. from the v1.11
+   install) is intact and untouched — the new install must not wipe or
+   reset a prior install's settings.
+4. **Update, end to end.** Ship a v2.0.1 test build. On the v2.0.0 install, use
+   in-app "Check for updates" (tray or Settings) — confirm the consent dialog
+   appears, accepting downloads the delta, and the app relaunches itself on
+   v2.0.1. Critically: confirm the **first window after the relaunch paints
+   normally** — no lingering black/grey WebView2 window (this is what
+   `_velopack_on_restarted`'s settle sleep is for).
+5. **Uninstall, both paths.** (a) Windows Settings → Apps → MicGuard →
+   Uninstall (Add/Remove Programs) — confirm shortcuts, the install dir, and
+   the Start Menu entry are all gone. (b) Tray → "Uninstall…" — confirm the
+   same removal PLUS the Run key is cleared and `%APPDATA%\MicGuard` is gone.
+   For at least one of the two paths, confirm `Update.exe uninstall --silent`
+   actually uninstalls silently with no leftover prompt — the exact flag
+   behavior is unconfirmed from reading the code alone.
+6. **Autostart survives a reboot.** With "Start with Windows" on, reboot the
+   PC — confirm the Run key's target (the install-root stub,
+   `%LOCALAPPDATA%\com.cbuzi.micguard\MicGuard.exe`, NOT
+   `current\MicGuard.exe`) launches successfully and the tray icon comes
+   back.
+7. **Portable bundle.** Run the Portable exe standalone (no install) — confirm
+   it runs correctly and its own in-app "Check for updates" also works
+   (Velopack's portable mode self-updates in place).
+8. **Pre-v2.0 install migration.** On a machine still running a v1.11.x (or
+   earlier) install: confirm "Check for updates" fails open to the releases
+   page (no compatible Velopack asset for the old updater to find) rather
+   than erroring or hanging. Then manually download and run the new
+   `Setup.exe` — confirm it installs cleanly over/alongside the old location
+   and the existing `%APPDATA%\MicGuard\config.json` carries over untouched.
+9. **Known/cosmetic — no action needed, just confirm it doesn't surprise
+   anyone:** `velopack.__version__` self-reports `0.0.0` even though `uv`/pip
+   report the installed package as `1.2.0`.
+10. **Build-script minors to eyeball on the first real release:**
+    `release.ps1`'s `gh release create` omits `--repo` (relies on `gh`'s
+    remote inference — confirm it still targets `Bristopher/MicGuard`
+    correctly); there's no overwrite-confirmation before
+    `Remove-Item $outDir -Recurse -Force` deletes an existing
+    `Releases\v<ver>\` folder on a re-run for the same version — don't
+    re-run for a version whose archive you want to keep without checking
+    first.
 
 ## Sweep log (commit ranges reviewed for unverified work)
 

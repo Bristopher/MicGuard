@@ -4,12 +4,12 @@
 working on this codebase.
 
 **Status:** 📌 MUST READ before generating any code
-**Last Updated:** 2026-07-17
+**Last Updated:** 2026-07-23
 
-This is a single-file Windows tray app (`micguard.py`, ~3,600 lines as of
-v1.8 — grew well past the original "~600 lines" from device priority
-lists/profiles/hotkeys/mixer/Mic-EQ). The rules are few but they are all real — each one
-traces to a bug or a deliberate product decision. Read
+This is a single-file Windows tray app (`micguard.py`, ~4,500 lines as of
+v2.0 — grew well past the original "~600 lines" from device priority
+lists/profiles/hotkeys/mixer/Mic-EQ/Velopack). The rules are few but they are
+all real — each one traces to a bug or a deliberate product decision. Read
 [Architecture.md](Architecture.md) for how the pieces fit.
 
 ---
@@ -22,13 +22,23 @@ traces to a bug or a deliberate product decision. Read
 - Prefer the Astral toolchain: `ruff` for lint+format (not yet configured in
   `pyproject.toml` — adding `[tool.ruff]` is welcome, adding black/flake8 is not).
 - **The libraries already here were handpicked**: pycaw, comtypes, pystray,
-  Pillow. Don't add competing ones. When a genuinely new capability needs a
-  library, consult [Preferred-Stack.md](Preferred-Stack.md) — but see Rule 1.
+  Pillow, velopack. Don't add competing ones. When a genuinely new capability
+  needs a library, consult [Preferred-Stack.md](Preferred-Stack.md) — but see
+  Rule 1.
 
-### 1. Stdlib-first — every dependency ships in a 19.6 MB onefile exe
+### 1. Dependencies still cost — but the exe is no longer onefile (v2.0, Velopack)
 
-This app is distributed as a PyInstaller `--onefile` exe that friends download.
-Dependencies cost megabytes and startup time, so the bar for adding one is high.
+**As of v2.0, MicGuard ships as a Velopack `--onedir` bundle inside an
+installer**, not a PyInstaller `--onefile` exe. The `velopack` runtime
+dependency (`uv add velopack`, currently pinned `>=1.2.0`) is expected and
+already `uv sync`'d — it is not an exception to justify, it's the packaging
+layer. `--onedir` means the app is a folder of files (not one giant exe), so
+per-dependency megabyte pressure is lower than the old onefile days, but the
+bar for a NEW dependency is still real: onedir folder size affects the
+Velopack delta-update payload (small dependency churn = small delta download
+for every installed user), and startup/import time still matters. Prefer
+stdlib for anything stdlib can do; consult
+[Preferred-Stack.md](Preferred-Stack.md) before adding a library.
 
 ```python
 # ✅ CORRECT — one GET against the GitHub API uses stdlib
@@ -38,19 +48,50 @@ with urllib.request.urlopen(req, timeout=10) as resp:
     return json.load(resp)
 
 # ❌ WRONG — do not add requests/httpx/pydantic/whenever for this app's needs
-import requests  # +MB in the exe for zero benefit here
+import requests  # bloats every installed user's next delta update
 ```
 
-Existing precedent: registry via **winreg**, mutex via **ctypes**, GitHub API
-via **urllib** — all stdlib. The one sanctioned exception: **pywebview** for
-ALL windows/dialogs. The user explicitly hates tkinter-family UIs (rejected
-ttk AND CustomTkinter designs, 2026-07-12) and wants web-CSS aesthetics — UI
-is frameless WebView2 windows styled by the shadcn/zinc CSS in
-`SETTINGS_HTML`/`DIALOG_HTML`. Never tkinter windows, never a second UI
-library, never Electron (~200 MB for what WebView2 does in ~2 MB). Frozen
-builds need `--collect-all webview` (release.ps1 has it). Every
-`create_window` call passes `background_color="#09090b"` (white-flash guard);
-the settings window is persistent (hide/show, never destroy — instant opens).
+Existing precedent: registry via **winreg**, mutex via **ctypes**, install/
+update/uninstall via **velopack** — the one sanctioned exception to
+stdlib-first, because Windows has no stdlib installer/updater story. UI
+exception: **pywebview** for ALL windows/dialogs. The user explicitly hates
+tkinter-family UIs (rejected ttk AND CustomTkinter designs, 2026-07-12) and
+wants web-CSS aesthetics — UI is frameless WebView2 windows styled by the
+shadcn/zinc CSS in `SETTINGS_HTML`/`DIALOG_HTML`. Never tkinter windows,
+never a second UI library, never Electron (~200 MB for what WebView2 does in
+~2 MB). Frozen builds need `--collect-all webview` (release.ps1 has it).
+Every `create_window` call passes `background_color="#09090b"` (white-flash
+guard); the settings window is persistent (hide/show, never destroy — instant
+opens).
+
+**Install/update/uninstall are now Velopack's job, not ours.** `velopack.App().run()`
+runs first in `main()` (before the single-instance mutex) so Velopack can
+intercept install/uninstall/update hooks and restart the process if needed.
+Updates go through `velopack.UpdateManager(update_feed_url())` →
+`check_for_updates()` → user-consent dialog (same consent convention as
+before) → `download_updates()` + `apply_updates_and_restart()` — no more
+urllib download + rename-swap trampoline, no more `apply_update`/
+`fetch_latest_release`/`parse_version`. Uninstall shells out to the installed
+`Update.exe uninstall --silent` after clearing the Run key and
+`%APPDATA%\MicGuard` — no more self-registered `HKCU\...\Uninstall` Add/Remove
+entry, no more `register_uninstall_entry`/`uninstall_from_arp`. Both paths are
+gated by `is_velopack_installed()`: source runs and the raw portable exe
+don't have an install dir to update/uninstall in place, so they fail open
+(update → open the releases page; nothing to uninstall).
+
+### IMMUTABLE IDENTITY — never change these once shipped
+
+These four values are how an ALREADY-INSTALLED copy on a friend's PC finds
+its update feed and its own files. Changing any of them silently breaks
+in-place updates for everyone who installed before the change (they'd need a
+fresh manual install, defeating the entire point of Velopack):
+
+| Value | Current | Where |
+|---|---|---|
+| **packId** | `com.cbuzi.micguard` | `PACK_ID` in `micguard.py`; `--packId` in `release.ps1`'s `vpk pack` |
+| **Update feed URL** | `https://github.com/Bristopher/MicGuard/releases/latest/download/` | `UPDATE_FEED_URL` in `micguard.py` (derived from `GITHUB_REPO`) |
+| **Config dir** | `%APPDATA%\MicGuard` | `CONFIG_DIR` in `micguard.py` — deliberately OUTSIDE the Velopack install dir so it survives updates/reinstalls |
+| **mainExe** | `MicGuard.exe` | `--mainExe MicGuard.exe` in `release.ps1`'s `vpk pack`; `installed_exe_stub()` builds `VELOPACK_DIR\MicGuard.exe` from it |
 
 ### 2. COM threading — the rule that actually bites
 
@@ -136,7 +177,7 @@ mixer nav/boost math, the EQ renderer/writer cores, `pick_popup_monitor`).
 Run it FIRST, before anything else:
 
 ```powershell
-uv run pytest -q                                 # 88 tests, must be green — run this FIRST
+uv run pytest -q                                 # 133 tests, must be green — run this FIRST
 ```
 
 There is still **no automated coverage for Core Audio behavior** (enforcement,
@@ -170,8 +211,9 @@ stays a manual harness script until a fake-`AudioUtilities` seam exists.
 1. ❌ **COM call without `CoInitialize` on a new thread** → `WinError -2147221008` (shipped once already)
 2. ❌ **Doing work inside `on_notify`/`on_default_device_changed`** → deadlock risk; poke the queue
 3. ❌ **Touching `IPolicyConfig._methods_`** → silently corrupts `SetDefaultEndpoint`
-4. ❌ **Adding a dependency for something stdlib does** → exe bloat (Rule 1)
+4. ❌ **Adding a dependency for something stdlib does** → bloats the onedir bundle and every installed user's next delta update (Rule 1)
 5. ❌ **Hand-bumping `VERSION` or tagging without `release.ps1`** → broken self-update chain
+5b. ❌ **Changing packId, the update feed URL, the config dir, or mainExe** → breaks in-place updates for every already-installed copy (Rule 1 — IMMUTABLE IDENTITY)
 6. ❌ **Silent auto-update or auto-anything destructive** → product rule: the user consents via dialog; failure falls back to opening the releases page
 7. ❌ **`print()` or letting exceptions escape a thread** → invisible/no-op in the `--noconsole` exe; log + degrade instead
 8. ❌ **Task Scheduler / services / HKLM for startup** → explicit product requirement: `HKCU\...\Run` only, no admin
@@ -198,7 +240,7 @@ stays a manual harness script until a fake-`AudioUtilities` seam exists.
 ## 🎯 TL;DR — Most Important Rules
 
 1. **uv** for everything Python; ruff if adding lint/format
-2. **Stdlib-first** — the exe is the product; dependencies cost MB
+2. **Stdlib-first** — ships as a Velopack onedir bundle now, not onefile, but dependencies still cost every user's next delta update
 3. **CoInitialize on every COM-touching thread**; Enforcer owns COM objects; callbacks only poke the queue
 4. **Config = `DEFAULT_CONFIG` + config.json merge** — no other config surface
 5. **`release.ps1` is the only way a version number changes**
