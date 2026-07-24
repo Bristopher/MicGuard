@@ -1,9 +1,17 @@
-# Stamps the version, rebuilds MicGuard.exe, commits, tags, and publishes a
-# GitHub release. See RELEASING.md.
+# Stamps the version, rebuilds the onedir MicGuard bundle, packages it with
+# Velopack (vpk), commits, tags, and publishes a GitHub release. See RELEASING.md.
 #
 # The version is decided AT BUILD TIME (howler-style): the script looks at the
 # latest released git tag, suggests the next version, and lets you accept it or
 # type your own. VERSION in micguard.py + pyproject.toml are stamped from that.
+#
+# Packaging is Velopack (vpk), Gkey Mover v2 style: PyInstaller builds an
+# --onedir bundle (dist\MicGuard\), `vpk pack` turns it into a Setup installer
+# + Portable exe + delta update feed (releases.win.json / RELEASES /
+# assets.win.json / *.nupkg). The feed files keep their exact vpk names - the
+# in-app updater fetches them by fixed name from releases/latest/download/.
+# The Setup + Portable exes are renamed to MicGuard_<version>_x64-{setup,Portable}.exe
+# for human downloaders.
 #
 # Usage:
 #   .\release.ps1                          # interactive: suggests next version,
@@ -20,9 +28,13 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
+$GithubRepo = 'Bristopher/MicGuard'
+
 if (git status --porcelain) {
     throw 'Working tree is not clean - commit or stash your changes first.'
 }
+gh auth status *> $null
+if ($LASTEXITCODE -ne 0) { throw "gh CLI is not logged in - run: gh auth login" }
 
 # ── Detect the latest RELEASED version from git tags ─────────────────────────
 $latestTag = git tag --list 'v*' |
@@ -44,8 +56,8 @@ $current = "$curMajor.$curMinor.$curPatch"
 if ($latestTag) {
     $released = "$($latestTag.Major).$($latestTag.Minor).$($latestTag.Patch)"
     Write-Host "Latest released tag: v$released"
-    # suggest: if micguard.py is already ahead of the last tag (pre-bumped for a
-    # test build), release exactly that; otherwise bump the last tag's patch
+    # suggest: if micguard.py is already ahead of the last tag (pre-bumped for
+    # a test build), release exactly that; otherwise bump the last tag's patch
     $aheadOfTag = ($curMajor -gt $latestTag.Major) -or
         ($curMajor -eq $latestTag.Major -and $curMinor -gt $latestTag.Minor) -or
         ($curMajor -eq $latestTag.Major -and $curMinor -eq $latestTag.Minor -and $curPatch -gt $latestTag.Patch)
@@ -88,21 +100,72 @@ Write-Host "Releasing v$new" -ForegroundColor Green
     Set-Content pyproject.toml -NoNewline
 Write-Host "  Stamped micguard.py + pyproject.toml -> $new"
 
-# ── Build ─────────────────────────────────────────────────────────────────────
-uv run pyinstaller --onefile --noconsole --name MicGuard `
+# ── Ensure vpk (Velopack CLI) is available ────────────────────────────────────
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    throw "dotnet SDK not found - install .NET (required for the vpk CLI) before running this script."
+}
+if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
+    Write-Host "vpk CLI not found - installing via 'dotnet tool install -g vpk'..." -ForegroundColor Yellow
+    dotnet tool install -g vpk
+    if ($LASTEXITCODE -ne 0) { throw "dotnet tool install -g vpk failed" }
+    $dotnetToolsDir = Join-Path $env:USERPROFILE ".dotnet\tools"
+    if ($env:Path -notlike "*$dotnetToolsDir*") { $env:Path = "$dotnetToolsDir;$env:Path" }
+    if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
+        throw "vpk still not found on PATH after install - open a new shell to pick up the PATH change and re-run."
+    }
+}
+
+# ── Step 1: Build the onedir PyInstaller bundle ───────────────────────────────
+Write-Host ""
+Write-Host "Step 1 - Building with PyInstaller (onedir)..." -ForegroundColor Yellow
+uv run pyinstaller --onedir --noconsole --name MicGuard `
     --icon assets\icon.ico --collect-all webview micguard.py
-if (-not (Test-Path dist\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard.exe' }
+if (-not (Test-Path dist\MicGuard\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard\MicGuard.exe' }
 
-# ── Archive a versioned copy (howler-style Releases\vX.Y.Z\) ─────────────────
-# dist\MicGuard.exe gets overwritten by every build; keep each release's exe
-# under Releases\ (git-ignored) so old builds stay reproducible on disk. The
-# GitHub asset stays exactly `MicGuard.exe` — the in-app updater requires it.
-$archiveDir = Join-Path $PSScriptRoot "Releases\v$new"
-New-Item -ItemType Directory -Force $archiveDir | Out-Null
-Copy-Item dist\MicGuard.exe (Join-Path $archiveDir "MicGuard-$new.exe") -Force
-Write-Host "  Archived -> Releases\v$new\MicGuard-$new.exe"
+# ── Step 2: Package with Velopack (vpk) ───────────────────────────────────────
+Write-Host ""
+Write-Host "Step 2 - Packaging with Velopack..." -ForegroundColor Yellow
 
-# ── Commit, tag, publish ─────────────────────────────────────────────────────
+$outDir = Join-Path $PSScriptRoot "Releases\v$new"
+if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
+New-Item -ItemType Directory -Force $outDir | Out-Null
+
+# Download the previously published release from GitHub first so vpk can
+# generate a DELTA package (small download for updaters). Only attempted when
+# a release actually exists - the first v2 build has no prior Velopack
+# release, so this must not fail the build.
+gh release view --repo $GithubRepo *> $null
+if ($LASTEXITCODE -eq 0) {
+    vpk download github --repoUrl "https://github.com/$GithubRepo" --outputDir $outDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  (delta download failed - building full package only)" -ForegroundColor DarkGray
+    }
+} else {
+    Write-Host "  (no prior GitHub release - skipping delta download, building full package)" -ForegroundColor DarkGray
+}
+
+vpk pack --packId com.cbuzi.micguard --packTitle "MicGuard" --packAuthors "Bristopher" `
+    --packVersion $new --packDir dist\MicGuard --mainExe MicGuard.exe `
+    --icon assets\icon.ico --outputDir $outDir
+if ($LASTEXITCODE -ne 0) { throw "vpk pack failed" }
+
+# ── Step 3: Rename the user-facing exes (Gkey convention) ────────────────────
+# The feed files (releases.win.json, RELEASES, assets.win.json, *.nupkg) keep
+# their exact vpk-generated names - the in-app updater fetches them by fixed
+# name. Only the Setup/Portable exes, meant for humans, get renamed.
+$setupSrc = Join-Path $outDir "com.cbuzi.micguard-win-Setup.exe"
+$setupDst = Join-Path $outDir "MicGuard_${new}_x64-setup.exe"
+if (Test-Path $setupSrc) { Rename-Item $setupSrc $setupDst -Force }
+
+$portableSrc = Join-Path $outDir "com.cbuzi.micguard-win-Portable.exe"
+$portableDst = Join-Path $outDir "MicGuard_${new}_x64-Portable.exe"
+if (Test-Path $portableSrc) { Rename-Item $portableSrc $portableDst -Force }
+
+Write-Host "  Packaged -> $outDir"
+
+# ── Step 4: Commit, tag, push ─────────────────────────────────────────────────
+Write-Host ""
+Write-Host "Step 4 - Commit, tag, push..." -ForegroundColor Yellow
 git add micguard.py pyproject.toml
 # the stamp may be a no-op when the version was pre-bumped for a test build
 if (git status --porcelain) { git commit -m "Release v$new" }
@@ -111,7 +174,30 @@ if (git status --porcelain) { git commit -m "Release v$new" }
 git tag -a "v$new" -m "v$new"
 git push origin main "v$new"
 
-if (-not $Notes) { $Notes = "MicGuard v$new" }
-gh release create "v$new" dist\MicGuard.exe --title "MicGuard v$new" --notes $Notes
+# ── Step 5: Publish the GitHub release ────────────────────────────────────────
+Write-Host ""
+Write-Host "Step 5 - Publishing GitHub release..." -ForegroundColor Yellow
+if (-not $Notes) {
+    $Notes = "MicGuard v$new`n`n" +
+        "Existing v1.11.x (and earlier) users: download and run the setup " +
+        "installer (MicGuard_${new}_x64-setup.exe) once - the old " +
+        "single-exe updater can't migrate itself to the new Velopack-based " +
+        "updater automatically. After that one-time install, in-app updates " +
+        "resume working normally."
+}
 
+$assets = Get-ChildItem $outDir -File | Where-Object {
+    $_.Name -in @("releases.win.json", "RELEASES", "assets.win.json") -or
+    $_.Name -like "*.nupkg" -or
+    $_.Name -like "MicGuard_*"
+} | ForEach-Object { $_.FullName }
+
+gh release create "v$new" @assets --title "MicGuard v$new" --notes $Notes
+if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+
+Write-Host ""
 Write-Host "Done: v$new published. Running apps will offer the update on next launch." -ForegroundColor Green
+Get-ChildItem $outDir | ForEach-Object {
+    $sizeMB = [math]::Round($_.Length / 1MB, 1)
+    Write-Host "  $($_.Name) (${sizeMB} MB)"
+}
