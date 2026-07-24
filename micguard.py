@@ -32,8 +32,6 @@ CONFIG_DIR = os.path.join(os.environ["APPDATA"], APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 LOG_PATH = os.path.join(CONFIG_DIR, "micguard.log")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\MicGuard"
-PUBLISHER = "Bristopher"
 WATCHDOG_SECONDS = 15  # safety net; real work is event-driven
 VOLUME_EPSILON = 0.005
 RECOMMENDED_VOLUME = 85  # the AT2020 sweet spot — "Use recommended" in settings
@@ -1425,7 +1423,9 @@ def launch_command() -> str:
 def set_run_at_startup(enabled: bool) -> None:
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
         if enabled:
-            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, launch_command())
+            target = (f'"{installed_exe_stub()}"' if is_velopack_installed()
+                      else launch_command())
+            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, target)
         else:
             try:
                 winreg.DeleteValue(key, APP_NAME)
@@ -1457,106 +1457,6 @@ def is_velopack_installed() -> bool:
         return exe.startswith(root + os.sep)
     except Exception:
         return False
-
-
-def uninstall_entry_values(exe: str, version: str, size_kb: int) -> dict:
-    """The Add/Remove Programs values for the frozen install. Pure — the
-    registry write lives in register_uninstall_entry."""
-    return {
-        "DisplayName": APP_NAME,
-        "DisplayVersion": version,
-        "Publisher": PUBLISHER,
-        "DisplayIcon": exe,
-        "InstallLocation": os.path.dirname(exe),
-        "UninstallString": f'"{exe}" --uninstall',
-        "URLInfoAbout": f"https://github.com/{GITHUB_REPO}",
-        "NoModify": 1,
-        "NoRepair": 1,
-        "EstimatedSize": size_kb,
-    }
-
-
-def register_uninstall_entry() -> None:
-    """Register in Windows' Installed Apps / Add-Remove Programs (HKCU — no
-    admin, mirroring the Run-key rule). Frozen only; re-run every start so
-    DisplayVersion tracks updates. Logs and degrades — never blocks startup."""
-    if not IS_FROZEN:
-        return
-    try:
-        exe = sys.executable
-        try:
-            size_kb = os.path.getsize(exe) // 1024
-        except OSError:
-            size_kb = 0
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as key:
-            for name, val in uninstall_entry_values(exe, VERSION, size_kb).items():
-                kind = winreg.REG_DWORD if isinstance(val, int) else winreg.REG_SZ
-                winreg.SetValueEx(key, name, 0, kind, val)
-    except OSError as e:
-        log.warning("could not register Add/Remove entry: %s", e)
-
-
-def unregister_uninstall_entry() -> None:
-    try:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        log.warning("could not remove Add/Remove entry: %s", e)
-
-
-def uninstall_self() -> None:
-    set_run_at_startup(False)
-    unregister_uninstall_entry()
-    shutil.rmtree(CONFIG_DIR, ignore_errors=True)
-    if IS_FROZEN:
-        current = sys.executable
-        bat = os.path.join(os.environ["TEMP"], "micguard_uninstall.bat")
-        with open(bat, "w", encoding="ascii") as f:
-            f.write(
-                "@echo off\n"
-                ":wait\n"
-                "timeout /t 1 /nobreak >nul\n"
-                f'del "{current}" >nul 2>&1\n'
-                f'if exist "{current}" goto wait\n'
-                'del "%~f0"\n'
-            )
-        subprocess.Popen(
-            ["cmd", "/c", bat],
-            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-            close_fds=True,
-        )
-
-
-def uninstall_from_arp() -> None:
-    """The Add/Remove Programs 'Uninstall' button path (MicGuard.exe
-    --uninstall). Consent first (native topmost MessageBox — the webview stack
-    never starts on this path), then stop the running instance, wait for its
-    mutex, and remove everything via the same uninstall_self as the tray."""
-    import ctypes
-    res = ctypes.windll.user32.MessageBoxW(
-        None,
-        "Remove MicGuard from this PC?\n\n"
-        "This deletes the app, its settings, and its startup entry.",
-        f"Uninstall {APP_NAME}",
-        0x00000004 | 0x00000030 | 0x00040000 | 0x00010000,
-    )  # MB_YESNO | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND
-    if res != 6:  # IDYES
-        return
-    try:
-        import psutil  # ships with pycaw
-        keep = {os.getpid(), os.getppid()}  # us + our onefile bootstrap parent
-        for p in psutil.process_iter(["pid", "name"]):
-            name = (p.info["name"] or "").lower()
-            if name == "micguard.exe" and p.info["pid"] not in keep:
-                try:
-                    p.kill()
-                except psutil.Error:
-                    pass
-    except Exception as e:
-        log.warning("could not stop the running instance: %s", e)
-    already_running(10.0)  # block until the dying instance releases the mutex
-    uninstall_self()
 
 
 def already_running(wait_seconds: float = 0.0) -> bool:
@@ -3000,6 +2900,40 @@ class App:
                 w.destroy()
             except Exception:
                 pass
+
+    def _uninstall(self, icon=None, item=None):
+        """Tray/menu Uninstall — consent, then hand off to Velopack's
+        uninstaller (removes shortcuts + install dir + Add/Remove entry).
+        Also clears %APPDATA%\\MicGuard so 'zero leftovers' holds."""
+        if not self._dialog(
+            "askyesno",
+            "Remove MicGuard from this PC?\n\n"
+            "This deletes the app, its settings, and its startup entry.",
+            yes="Remove", no="Cancel",
+        ):
+            return
+        try:
+            set_run_at_startup(False)
+        except OSError as e:
+            log.warning("could not clear Run key on uninstall: %s", e)
+        self.history.add("uninstall", "MicGuard uninstalled")
+        self.history.flush()
+        update_exe = os.path.join(VELOPACK_DIR, "Update.exe")
+        if is_velopack_installed() and os.path.exists(update_exe):
+            try:
+                shutil.rmtree(CONFIG_DIR, ignore_errors=True)  # our data, outside install dir
+                # Velopack CLI uses the "uninstall" subcommand (not a
+                # --uninstall flag); -s/--silent suppresses its own prompt
+                # since we already confirmed above.
+                subprocess.Popen([update_exe, "uninstall", "--silent"],
+                                 creationflags=subprocess.DETACHED_PROCESS,
+                                 close_fds=True)
+            except Exception as e:
+                log.warning("velopack uninstall failed: %s", e)
+        else:
+            # source / portable-dev: nothing installed to remove but honor the ask
+            shutil.rmtree(CONFIG_DIR, ignore_errors=True)
+        self._quit()
 
     # ---- updates ----
 
@@ -4534,9 +4468,6 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
     log.info("%s v%s starting (frozen=%s)", APP_NAME, VERSION, IS_FROZEN)
-    if IS_FROZEN and "--uninstall" in sys.argv:
-        uninstall_from_arp()
-        return
     if already_running(0.0):
         log.info("another instance is running; exiting")
         return
