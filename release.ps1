@@ -118,8 +118,16 @@ if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
 # ── Step 1: Build the onedir PyInstaller bundle ───────────────────────────────
 Write-Host ""
 Write-Host "Step 1 - Building with PyInstaller (onedir)..." -ForegroundColor Yellow
-uv run pyinstaller --onedir --noconsole --name MicGuard `
+# Wipe any prior dist/build first: without --noconfirm PyInstaller's COLLECT
+# step ABORTS on a non-empty dist\MicGuard, and because a stale MicGuard.exe
+# still satisfies the Test-Path check below, a failed rebuild would silently
+# ship the OLD onedir (this bit us on the first v2.0.0 pack). --noconfirm makes
+# COLLECT overwrite; the explicit clean + exit-code check are belt-and-braces.
+if (Test-Path dist)  { Remove-Item dist  -Recurse -Force }
+if (Test-Path build) { Remove-Item build -Recurse -Force }
+uv run pyinstaller --noconfirm --onedir --noconsole --name MicGuard `
     --icon assets\icon.ico --collect-all webview micguard.py
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed (exit $LASTEXITCODE)" }
 if (-not (Test-Path dist\MicGuard\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard\MicGuard.exe' }
 
 # ── Step 2: Package with Velopack (vpk) ───────────────────────────────────────
