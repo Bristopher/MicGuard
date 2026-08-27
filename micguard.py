@@ -3619,7 +3619,14 @@ class App:
         self._settings_win = webview.create_window(
             f"{APP_NAME} Settings", html=SETTINGS_HTML, js_api=Api(),
             width=SET_W, height=SET_H, frameless=True, on_top=True,
-            resizable=False, hidden=hidden, background_color="#09090b")
+            resizable=False, hidden=hidden, background_color="#09090b",
+            # easy_drag defaults True for frameless windows, which makes a
+            # mousedown ANYWHERE drag the whole window — that swallows the
+            # volume slider (and any other control): grabbing it moved the
+            # popup instead of sliding. The header keeps its own
+            # `.pywebview-drag-region` drag handler regardless, so dragging by
+            # the title bar still works. (2026-07-24)
+            easy_drag=False)
         # Alt+F4 etc. can still destroy it; recreate lazily on next open
         self._settings_win.events.closed += lambda: setattr(self, "_settings_win", None)
 

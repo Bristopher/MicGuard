@@ -854,6 +854,12 @@ and the logic is right — not how it *feels* in the real frameless 442 px windo
    the Profile dropdown still discards them silently (pre-existing behavior;
    the guard covers Close, not the dropdown). Confirm this isn't surprising in
    practice, or flag it to add the same modal to the profile switch.
+8. **Volume slider drag (v2.0.1 fix):** grab the "Volume to hold" slider and
+   drag — it should now SLIDE the value (was dragging the whole window because
+   pywebview's frameless `easy_drag` captured the mousedown; fixed by
+   `easy_drag=False` on the settings window). The window must STILL be
+   draggable by its title-bar/header. Confirm the typed % box and device-row %
+   fields still edit too.
 
 ## Changelog (verified items move here)
 
