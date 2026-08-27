@@ -939,3 +939,27 @@ class VelopackHelpersTests(unittest.TestCase):
 
     def test_pack_id_is_stable(self):
         self.assertEqual(m.PACK_ID, "com.cbuzi.micguard")
+
+
+class OsdEnabledSettingTests(unittest.TestCase):
+    def test_osd_enabled_defaults_true(self):
+        self.assertIs(m.DEFAULT_CONFIG["osd_enabled"], True)
+
+    def test_old_config_gains_osd_key_via_merge(self):
+        # a pre-v2.x config with no osd_enabled key picks up the default
+        old = {"enforce": False}
+        self.assertIs((m.DEFAULT_CONFIG | old)["osd_enabled"], True)
+
+    def test_show_osd_returns_early_when_disabled(self):
+        # the guard is show_osd's first statement: disabled -> return before
+        # touching any COM/window state (a bare stub with only cfg suffices)
+        import types
+        stub = types.SimpleNamespace(cfg={"osd_enabled": False})
+        self.assertIsNone(m.App.show_osd(stub, "Vol", 50))
+
+    def test_show_osd_proceeds_past_guard_when_enabled(self):
+        # enabled -> passes the guard and fails on the stub's missing window
+        # attrs, which show_osd swallows (never raises) -> returns None
+        import types
+        stub = types.SimpleNamespace(cfg={"osd_enabled": True})
+        self.assertIsNone(m.App.show_osd(stub, "Vol", 50))

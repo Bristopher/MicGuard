@@ -119,6 +119,7 @@ predate this key.
 | `mixer_hover_select` | `true` | Moving the mouse over a mixer row selects it, so keyboard nav/R act on it | Mixer (live, js_api `hover`) |
 | `mixer_drag` | `true` | Click-and-drag a row's bar to set that channel's volume | Mixer (live, js_api `set_volume`) |
 | `mixer_scroll` | `false` | Scroll wheel over a hovered row nudges its volume ±2% | Mixer (live, js_api `scroll`) |
+| `osd_enabled` | `true` | Show the on-screen volume/profile popup (OSD) when a hotkey fires; `false` = hotkeys act silently (guarded at the top of `App.show_osd`) | App (`show_osd`) |
 
 ## Adding a new setting — exact steps
 
@@ -147,7 +148,17 @@ Then:
    per-device fields).
 3. Expose it in the settings window (`SETTINGS_HTML` + the matching `Api`
    method) — a control + a line in `save()` writing it back to `self.cfg`
-   before `save_config(self.cfg)`.
+   before `save_config(self.cfg)`. **Also add it to `get_state()`** (as a
+   camelCase key) and set the control from that key in `refresh()`.
+   **Dirty-tracking (v2.0) — mandatory or the setting won't work right:**
+   the settings window is a working-copy form (see the "Settings
+   dirty-tracking" row in [System-Conventions.md](System-Conventions.md)),
+   so your new field MUST also be added to the JS `collectState()` (which is
+   both what `save()` sends AND what the unsaved-changes diff compares) — omit
+   it and the field neither persists nor counts as an unsaved change. For the
+   green "changed" highlight, add a `.switchrow`-housed control to
+   `CHANGED_SIMPLE`, or extend the per-row diff in `paintChanges()` for list
+   rows. Give the setting a `<span class="help" data-tip="…">?</span>` too.
 4. If the Enforcer must react to the change immediately, `save()` already
    calls `reattach()`/`poke()` — piggyback on that; don't add a new signal.
    Hotkey changes piggyback on `App._restart_hotkeys()` instead.

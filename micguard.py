@@ -82,6 +82,7 @@ DEFAULT_CONFIG = {
     "fse_incompatible": [],    # learned exes that minimize under same-monitor popups
     "run_at_startup": True,
     "check_updates": True,
+    "osd_enabled": True,       # show the on-screen volume/profile popup on hotkey fire
 }
 
 log = logging.getLogger(APP_NAME)
@@ -1637,14 +1638,53 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 .hkstep:focus{border-color:#3f3f46}
 .addlink{color:#71717a;font-size:12px;text-decoration:none;cursor:pointer}
 .addlink:hover{color:#fafafa;text-decoration:underline}
+/* ---- changed-field highlighting (green) ---- */
+.switchrow.changed .lab, .vol-row.changed>label, .sec.changed>label{color:#22c55e}
+.switchrow.changed .knob{box-shadow:0 0 0 2px rgba(34,197,94,.35)}
+.switchrow.changed select, .switchrow.changed .numin,
+.vol-row.changed+input[type=range]{border-color:#22c55e}
+#profsel.changed{border-color:#22c55e}
+#eqon.changed label{color:#22c55e}
+.devrow.changed{border-color:#22c55e}
+.devrow.added{border-color:#22c55e;background:#0d1c12}
+.hkrow.changed{outline:1px solid #22c55e;outline-offset:2px;border-radius:8px}
+.hkrow.added{outline:1px solid #22c55e;outline-offset:2px;border-radius:8px;background:#0d1c12}
+/* ---- help "?" tooltips ---- */
+.help{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+      margin-left:5px;border:1px solid #3f3f46;border-radius:50%;color:#71717a;
+      font:700 9px 'Segoe UI';cursor:help;vertical-align:middle;user-select:none;flex:none}
+.help:hover{border-color:#a1a1aa;color:#fafafa}
+#tip{position:fixed;left:0;top:0;max-width:250px;background:#18181b;color:#e4e4e7;
+     border:1px solid #3f3f46;border-radius:8px;padding:8px 10px;font:400 11.5px/1.45 'Segoe UI';
+     box-shadow:0 8px 24px rgba(0,0,0,.55);z-index:100;pointer-events:none;
+     opacity:0;transition:opacity .12s;white-space:normal}
+#tip.show{opacity:1}
+/* ---- footer: dirty indicator + Cancel ---- */
+.footinfo{margin-right:auto;display:flex;align-items:center;gap:12px;min-width:0}
+.footinfo .gh{margin-right:0}
+.footinfo #savemsg{flex:0 1 auto;text-align:left}
+.dirtybar{align-self:center;font-size:12px;font-weight:600;color:#f59e0b;
+      white-space:nowrap;opacity:0;transition:opacity .18s}
+.dirtybar.show{opacity:1}
+.btn:disabled{opacity:.4;cursor:default}
+/* ---- close-confirm modal (3-way) ---- */
+.modalbg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
+      align-items:center;justify-content:center;z-index:120}
+.modalbg.show{display:flex}
+.modalcard{background:#09090b;border:1px solid #27272a;border-radius:12px;
+      padding:20px;width:300px;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.modalcard .mtitle{font-size:14px;font-weight:700;margin-bottom:6px}
+.modalcard .mtext{font-size:12.5px;color:#a1a1aa;margin-bottom:16px}
+.modalcard .mbtns{display:flex;flex-direction:column;gap:8px}
+.modalcard .btn{width:100%;justify-content:center}
 </style></head><body>
 <div class="header pywebview-drag-region">
   <h1>MicGuard</h1><span class="ver" id="ver"></span>
-  <button class="close" onclick="pywebview.api.cancel()">&#x2715;</button>
+  <button class="close" onclick="tryClose()">&#x2715;</button>
 </div>
 <p class="sub">Keeps your devices and volumes exactly where you set them</p>
 <div class="content">
-<label for="profsel">Profile</label>
+<label for="profsel">Profile <span class="help" data-tip="A named set of device priorities, volumes, hotkeys and Mic EQ. Switch between setups (e.g. Desk vs Streaming) here. New copies the current profile; Save makes the selected one active.">?</span></label>
 <div class="profrow">
   <div class="select-wrap"><select id="profsel" onchange="refresh(this.value)"></select></div>
   <button class="sbtn" onclick="promptProfile('new')">New</button>
@@ -1658,14 +1698,15 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 </div>
 <div class="err" id="proferr" style="display:none"></div>
 
-<div class="sec"><label>Microphones <span class="dim">(priority order)</span></label>
+<div class="sec"><label>Microphones <span class="dim">(priority order)</span>
+  <span class="help" data-tip="Your preferred capture devices, top = highest priority. MicGuard keeps the top connected one as the Windows default; if it unplugs, it falls back to the next one down. Use the arrows to reorder, set a hold volume per device, and ✕ to remove.">?</span></label>
   <a class="rec" id="reclink" href="javascript:void(0)" onclick="useRecommended()">Use recommended</a></div>
 <div id="miclist"></div>
 <div class="addrow"><div class="select-wrap"><select id="addmic"></select></div>
   <button class="sbtn" id="addmicbtn" onclick="addDev('mic')">+ Add fallback</button></div>
 
 <div class="meter"><div id="meterfill"></div></div>
-<div class="vol-row"><label>Volume to hold</label>
+<div class="vol-row"><label>Volume to hold <span class="help" data-tip="The exact level MicGuard pins your top mic at. Anything (Windows, an app, a hotkey) that moves it gets snapped back here within ~50 ms while Enforce is on.">?</span></label>
   <span class="volwrap"><input id="volv" inputmode="numeric" maxlength="3"><span class="pct">%</span></span></div>
 <input type="range" id="vol" min="0" max="100" value="85">
 <div class="switchrow">
@@ -1674,12 +1715,14 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
   <label class="switch"><input type="checkbox" id="sw_hear"><span class="knob"></span></label>
 </div>
 
-<div class="sec"><label>Headphones / Speakers <span class="dim">(priority order)</span></label></div>
+<div class="sec"><label>Headphones / Speakers <span class="dim">(priority order)</span>
+  <span class="help" data-tip="Same priority idea as mics, for your output devices. Tick 'hold' on a device to keep enforcing its volume, not just set it once. Leave empty if you only want MicGuard managing your mic.">?</span></label></div>
 <div id="outlist"></div>
 <div class="addrow"><div class="select-wrap"><select id="addout"></select></div>
   <button class="sbtn" id="addoutbtn" onclick="addDev('out')">+ Add fallback</button></div>
 
-<div class="sec"><label>Hotkeys <span class="dim">(volume nudges)</span></label>
+<div class="sec" id="hksec"><label>Hotkeys <span class="dim">(volume nudges)</span>
+  <span class="help" data-tip="Global keyboard shortcuts that nudge volume up/down by a step, or target a specific app, the active window, the mixer, or a profile switch. Click a key field and press your combo. The master switch here turns all bindings on or off.">?</span></label>
   <label class="switch"><input type="checkbox" id="sw_hotkeys"
     onchange="S && (S.hotkeys.enabled = this.checked)"><span class="knob"></span></label></div>
 <div id="hklist"></div>
@@ -1735,8 +1778,15 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
     <option value="off">Hide</option>
   </select></div>
 </div>
+<div class="switchrow">
+  <div><div class="lab">Show volume popup (OSD)
+       <span class="help" data-tip="The small on-screen display that appears near the bottom of your screen when a volume or profile-switch hotkey fires. Turn this off to make hotkeys act silently — they still work, they just don't show the popup.">?</span></div>
+       <div class="hint">On-screen readout when a volume/profile hotkey fires &middot; off = hotkeys act silently</div></div>
+  <label class="switch"><input type="checkbox" id="sw_osd"><span class="knob"></span></label>
+</div>
 
-<div class="sec"><label>Mic EQ <span class="dim">(optional extension)</span></label></div>
+<div class="sec"><label>Mic EQ <span class="dim">(optional extension)</span>
+  <span class="help" data-tip="Optional real audio processing for your mic via Equalizer APO (a free driver extension): up to +20 dB gain beyond the driver's max, plus a bass low-shelf. Saved per profile. Needs a one-time setup + reboot.">?</span></label></div>
 <div id="eqcard">
   <div id="eqoff" style="display:none">
     <div class="hint" style="margin-bottom:8px">
@@ -1772,17 +1822,20 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 
 <hr>
 <div class="switchrow">
-  <div><div class="lab">Enforce mic + volume</div>
+  <div><div class="lab">Enforce mic + volume
+       <span class="help" data-tip="The master switch. When on, MicGuard actively holds your chosen default mic and its volume, re-asserting them within ~50 ms whenever Windows or an app changes them. Turn off to pause all enforcement without quitting.">?</span></div>
        <div class="hint">The main switch &mdash; snap settings back the moment anything changes them</div></div>
   <label class="switch"><input type="checkbox" id="sw_enforce"><span class="knob"></span></label>
 </div>
 <div class="switchrow">
-  <div><div class="lab">Start with Windows</div>
+  <div><div class="lab">Start with Windows
+       <span class="help" data-tip="Adds a per-user startup entry (HKCU Run key) so MicGuard launches when you log in. No admin rights, no Task Scheduler, no service — just your account.">?</span></div>
        <div class="hint">Per-user startup entry &mdash; no admin, no Task Scheduler</div></div>
   <label class="switch"><input type="checkbox" id="sw_startup"><span class="knob"></span></label>
 </div>
 <div class="switchrow">
-  <div><div class="lab">Check for updates on launch</div>
+  <div><div class="lab">Check for updates on launch
+       <span class="help" data-tip="On startup, MicGuard checks GitHub for a newer release. It never installs silently — you always get a dialog to confirm first. You can also check any time with the button below.">?</span></div>
        <div class="hint">Always asks before installing anything</div></div>
   <label class="switch"><input type="checkbox" id="sw_updates"><span class="knob"></span></label>
 </div>
@@ -1792,24 +1845,46 @@ hr{border:none;border-top:1px solid #27272a;margin:18px 0 6px}
 </div>
 <div id="updcard" style="display:none"></div>
 <div class="switchrow">
-  <div><div class="lab">Fallback alerts</div>
+  <div><div class="lab">Fallback alerts
+       <span class="help" data-tip="Shows a brief on-screen alert whenever your active device disconnects and MicGuard switches to the next device in your priority list, so you know the switch happened.">?</span></div>
        <div class="hint">Popup when your device disconnects and MicGuard switches to a fallback</div></div>
   <label class="switch"><input type="checkbox" id="sw_fallback"><span class="knob"></span></label>
 </div>
-<div class="sec histhead"><label>History</label>
+<div class="sec histhead"><label>History
+  <span class="help" data-tip="A running log of notable events — fallback switches, saves, and similar. Always recorded; 'clear' empties it. This is informational only and isn't part of your saved settings.">?</span></label>
   <a class="chknow" href="javascript:void(0)" onclick="clearHistory()">clear</a></div>
 <div id="histlist" class="histlist"></div>
 </div>
 <div class="btns">
-  <a class="gh" href="javascript:void(0)" onclick="pywebview.api.open_github()">GitHub &#x2197;</a>
-  <span id="savemsg"></span>
-  <button class="btn secondary" onclick="pywebview.api.cancel()">Close</button>
-  <button class="btn primary" onclick="save()">Save</button>
+  <div class="footinfo">
+    <a class="gh" href="javascript:void(0)" onclick="pywebview.api.open_github()">GitHub &#x2197;</a>
+    <span id="dirtybar" class="dirtybar">&#9679; Unsaved changes</span>
+    <span id="savemsg"></span>
+  </div>
+  <button class="btn secondary" id="btncancel" onclick="cancelChanges()" disabled>Cancel</button>
+  <button class="btn secondary" onclick="tryClose()">Close</button>
+  <button class="btn primary" id="btnsave" onclick="save()" disabled>Save</button>
+</div>
+<div id="tip"></div>
+<div class="modalbg" id="closemodal">
+  <div class="modalcard">
+    <div class="mtitle">Unsaved changes</div>
+    <div class="mtext">You have changes that haven't been saved. What would you like to do?</div>
+    <div class="mbtns">
+      <button class="btn primary" onclick="closeSave()">Save &amp; Close</button>
+      <button class="btn secondary" onclick="closeDiscard()">Discard &amp; Close</button>
+      <button class="btn secondary" onclick="closeKeep()">Keep Editing</button>
+    </div>
+  </div>
 </div>
 <script>
 const vol = document.getElementById('vol'), volv = document.getElementById('volv');
 const hear = document.getElementById('sw_hear');
 let S = null, recommended = 85, promptMode = null, lastTargetId = null;
+// dirty-state tracking: baseline = JSON of the state as last loaded/saved;
+// baseObj = its parsed form (for per-row green); baselineProfile = the profile
+// loaded, so Cancel reloads the same one.
+let baseline = null, baseObj = null, baselineProfile = null;
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 // manual update check, MediaStopper-style: a found update expands into a
@@ -1871,6 +1946,7 @@ function sliderToRow(){
   S.mics[t].volume = +vol.value;
   const el = document.querySelector(`.devrow[data-flow="mic"][data-i="${t}"] .dvol`);
   if (el) el.value = vol.value;
+  updateDirty();   // slider drag mutates the mic row without a re-render
 }
 vol.addEventListener('input', () => { paint(); sliderToRow(); preview(); });
 // the number is editable: digits only, clamped 0-100, live-syncs the slider
@@ -1919,6 +1995,7 @@ function renderList(flow){
              : '<div class="empty">Nothing here yet &mdash; add a device below</div>';
   renderAdd(flow);
   if (flow === 'mic') syncMicTarget();
+  updateDirty();
 }
 function renderAdd(flow){
   const all = flow === 'out' ? S.all_outputs : S.all_mics;
@@ -2059,6 +2136,7 @@ function renderHk(){
   document.getElementById('sw_mixdrag').checked = S.mixerDrag !== false;
   document.getElementById('sw_mixscroll').checked = !!S.mixerScroll;
   document.getElementById('fspop').value = S.fullscreenPopups || 'auto';
+  updateDirty();
 }
 // combo capture: focus the field and press keys; Escape clears
 // whitelist mirrors parse_hotkey()'s _VKS + single alpha/digit support —
@@ -2067,7 +2145,7 @@ const HK_MAIN_KEYS = new Set(['up', 'down', 'left', 'right', 'space', 'tab',
   'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12']);
 function hkCapture(e, i){
   e.preventDefault();
-  if (e.key === 'Escape'){ S.hotkeys.bindings[i].keys = ''; e.target.value = ''; return; }
+  if (e.key === 'Escape'){ S.hotkeys.bindings[i].keys = ''; e.target.value = ''; updateDirty(); return; }
   if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
   let k = e.key.toLowerCase();
   if (k === ' ') k = 'space';
@@ -2078,6 +2156,7 @@ function hkCapture(e, i){
               + (e.shiftKey ? 'shift+' : '') + (e.metaKey ? 'win+' : '') + k;
   S.hotkeys.bindings[i].keys = combo;
   e.target.value = combo;
+  updateDirty();
 }
 function hkStep(i, el){
   let v = Math.round(+el.value) || 0;
@@ -2155,6 +2234,9 @@ async function setupEq(btn){
 
 // ---- state in / state out ----
 async function refresh(profile){
+  // drop the baseline while loading so mid-refresh renders don't paint
+  // stale green; it's re-snapshotted at the end once the DOM is populated
+  baseline = null; baseObj = null;
   const s = await pywebview.api.get_state(profile || null);
   S = s;
   recommended = s.recommended;
@@ -2176,7 +2258,11 @@ async function refresh(profile){
   document.getElementById('sw_startup').checked = s.runAtStartup;
   document.getElementById('sw_updates').checked = s.checkUpdates;
   document.getElementById('sw_fallback').checked = s.notifyFallback;
+  document.getElementById('sw_osd').checked = s.osdEnabled !== false;
   setMeter(0);
+  baselineProfile = document.getElementById('profsel').value;
+  setBaseline();     // this loaded state is the clean baseline
+  updateDirty();     // clears the bar + any leftover green
 }
 window.addEventListener('pywebviewready', () => refresh());
 let saveMsgTimer = null;
@@ -2200,9 +2286,12 @@ function showSaved(r){
   if (saveMsgTimer) clearTimeout(saveMsgTimer);
   saveMsgTimer = setTimeout(() => { el.className = ''; }, (fails.length || eqErr) ? 6000 : 2500);
 }
-async function save(){
+// The exact object save() persists — also the unit dirty-tracking diffs
+// against its baseline. Runtime-only EQ fields (available/processed/error)
+// are deliberately excluded so they never register as "unsaved changes".
+function collectState(){
   const strip = l => l.map(d => { const c = {...d}; delete c.connected; return c; });
-  const r = await pywebview.api.save({
+  return {
     active: document.getElementById('profsel').value,
     mics: strip(S.mics),
     outputs: strip(S.outputs),
@@ -2219,8 +2308,13 @@ async function save(){
     mixerDrag: document.getElementById('sw_mixdrag').checked,
     mixerScroll: document.getElementById('sw_mixscroll').checked,
     fullscreenPopups: document.getElementById('fspop').value,
-    micEq: S.micEq,
-  });
+    osdEnabled: document.getElementById('sw_osd').checked,
+    micEq: S.micEq ? {enabled: !!S.micEq.enabled,
+                      gainDb: S.micEq.gainDb, bassDb: S.micEq.bassDb} : null,
+  };
+}
+async function save(){
+  const r = await pywebview.api.save(collectState());
   S.hotkeyFailures = (r && r.hotkeyFailures) || [];
   renderHk();  // repaint red markers on combos another app holds
   if (r && r.micEqError){ S.micEq.error = r.micEqError; }
@@ -2229,7 +2323,123 @@ async function save(){
   S.history = r.history || S.history;
   renderHistory();
   showSaved(r);
+  setBaseline();   // the just-saved state is the new clean baseline
+  updateDirty();
 }
+
+// ================= dirty-state tracking =================
+const diffJson = (a, b) => JSON.stringify(a) !== JSON.stringify(b);
+function setBaseline(){
+  if (!S){ baseline = null; baseObj = null; return; }
+  baseline = JSON.stringify(collectState());
+  baseObj = JSON.parse(baseline);
+}
+function isDirty(){
+  return baseline !== null && JSON.stringify(collectState()) !== baseline;
+}
+// simple controls: state-key -> element id (each lives in a .switchrow)
+const CHANGED_SIMPLE = {
+  enforce:'sw_enforce', runAtStartup:'sw_startup', checkUpdates:'sw_updates',
+  notifyFallback:'sw_fallback', mixerNav:'mixnav', mixerMeters:'sw_mixmeters',
+  mixerTimeout:'mixtimeout', mixerHoverSelect:'sw_mixhover', mixerDrag:'sw_mixdrag',
+  mixerScroll:'sw_mixscroll', fullscreenPopups:'fspop', osdEnabled:'sw_osd',
+};
+function paintChanges(){
+  if (!baseObj || !S) return;
+  const c = collectState();
+  for (const key in CHANGED_SIMPLE){
+    const el = document.getElementById(CHANGED_SIMPLE[key]);
+    if (!el) continue;
+    (el.closest('.switchrow') || el.parentElement)
+      .classList.toggle('changed', diffJson(c[key], baseObj[key]));
+  }
+  document.getElementById('hksec').classList.toggle('changed',
+    diffJson(c.hotkeys.enabled, baseObj.hotkeys.enabled));
+  document.getElementById('profsel').classList.toggle('changed',
+    diffJson(c.active, baseObj.active));
+  const eqon = document.getElementById('eqon');
+  if (eqon) eqon.classList.toggle('changed', diffJson(c.micEq, baseObj.micEq));
+  // per-row device highlighting: id-keyed (added = new id, changed = vol/hold differ)
+  ['mic', 'out'].forEach(flow => {
+    const bm = flow === 'out' ? baseObj.outputs : baseObj.mics;
+    document.querySelectorAll(`.devrow[data-flow="${flow}"]`).forEach(el => {
+      const d = listOf(flow)[+el.dataset.i];
+      if (!d){ el.classList.remove('changed', 'added'); return; }
+      const base = bm.find(x => x.id === d.id);
+      el.classList.toggle('added', !base);
+      el.classList.toggle('changed', !!base &&
+        (base.volume !== d.volume || !!base.hold_volume !== !!d.hold_volume));
+    });
+  });
+  // per-row hotkey highlighting: positional (added = beyond baseline length)
+  const hb = baseObj.hotkeys.bindings;
+  document.querySelectorAll('.hkrow').forEach((el, i) => {
+    const b = S.hotkeys.bindings[i];
+    if (!b){ el.classList.remove('changed', 'added'); return; }
+    const bb = hb[i];
+    el.classList.toggle('added', !bb);
+    el.classList.toggle('changed', !!bb &&
+      (bb.keys !== b.keys || bb.target !== b.target || bb.step !== b.step));
+  });
+}
+function updateDirty(){
+  if (!S) return;
+  const dirty = isDirty();
+  document.getElementById('dirtybar').classList.toggle('show', dirty);
+  document.getElementById('btnsave').disabled = !dirty;
+  document.getElementById('btncancel').disabled = !dirty;
+  paintChanges();
+}
+function cancelChanges(){
+  if (baseline === null) return;   // nothing loaded yet
+  refresh(baselineProfile);        // reload the saved state, discarding edits
+}
+// close guard: dirty -> 3-way modal; clean -> hide immediately
+function tryClose(){
+  if (baseline !== null && isDirty())
+    document.getElementById('closemodal').classList.add('show');
+  else
+    pywebview.api.cancel();
+}
+function closeKeep(){ document.getElementById('closemodal').classList.remove('show'); }
+function closeDiscard(){
+  document.getElementById('closemodal').classList.remove('show');
+  pywebview.api.cancel();
+}
+async function closeSave(){
+  document.getElementById('closemodal').classList.remove('show');
+  await save();
+  pywebview.api.cancel();
+}
+// any edit inside the scrolling content re-evaluates dirty state
+const _content = document.querySelector('.content');
+_content.addEventListener('input', updateDirty);
+_content.addEventListener('change', updateDirty);
+
+// ================= help "?" tooltips =================
+const tip = document.getElementById('tip');
+function positionTip(h){
+  const r = h.getBoundingClientRect();
+  tip.style.left = '0px'; tip.style.top = '0px';   // reset for an accurate measure
+  const tw = tip.offsetWidth, th = tip.offsetHeight, pad = 8;
+  let left = r.left + r.width / 2 - tw / 2;
+  left = Math.max(pad, Math.min(left, window.innerWidth - tw - pad));
+  let top = r.top - th - 6;                         // prefer above
+  if (top < pad) top = r.bottom + 6;               // flip below if no room
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+}
+document.addEventListener('mouseover', e => {
+  const h = e.target.closest ? e.target.closest('.help') : null;
+  if (!h) return;
+  tip.textContent = h.dataset.tip || '';
+  tip.classList.add('show');
+  positionTip(h);
+});
+document.addEventListener('mouseout', e => {
+  const h = e.target.closest ? e.target.closest('.help') : null;
+  if (h) tip.classList.remove('show');
+});
 </script></body></html>"""
 
 MENU_W, MENU_H = 248, 356
@@ -3152,6 +3362,7 @@ class App:
                     "mixerDrag": bool(app.cfg.get("mixer_drag", True)),
                     "mixerScroll": bool(app.cfg.get("mixer_scroll", False)),
                     "fullscreenPopups": app.cfg.get("fullscreen_popups", "auto"),
+                    "osdEnabled": bool(app.cfg.get("osd_enabled", True)),
                     "micEq": app._mic_eq_state(sel),
                     "version": VERSION,
                     "recommended": RECOMMENDED_VOLUME,
@@ -3318,6 +3529,7 @@ class App:
                 fsp = state.get("fullscreenPopups")
                 app.cfg["fullscreen_popups"] = (fsp if fsp in ("auto", "other", "off")
                                                 else "auto")
+                app.cfg["osd_enabled"] = bool(state.get("osdEnabled", True))
                 me = state.get("micEq") or {}
                 prof["mic_eq"] = {"enabled": bool(me.get("enabled")),
                                   "gain_db": me.get("gainDb", 0),
@@ -3932,6 +4144,8 @@ class App:
         """Volume OSD, bottom-center, no focus steal. Called from the
         HotkeyManager thread — never raises (a broken OSD must not take the
         hotkeys down with it)."""
+        if not self.cfg.get("osd_enabled", True):
+            return  # user disabled the on-screen volume/profile popup
         try:
             rect, try_same = popup_monitor_rect(self.cfg)
             if rect is None:

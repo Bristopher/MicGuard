@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-23 — §20 added: v2.0.0 Velopack install/update/uninstall migration — code shipped (identity+helpers, App bootstrap, UpdateManager wiring, install/uninstall/Add-Remove + stub autostart, release.ps1 rewrite), manual-verify matrix listed (needs a real build + published release to exercise)
+**Updated:** 2026-07-24 — §21 added: settings dirty-tracking (green highlight, unsaved-changes bar, Cancel/revert, 3-way close guard), custom `?` help tooltips, and the `osd_enabled` OSD toggle — code shipped + machine-verified (137 pytest, node --check, stubbed-pywebview harness), live-window feel + tooltip placement + OSD suppression owed to human review. Prior: 2026-07-23 — §20 added: v2.0.0 Velopack install/update/uninstall migration (needs a real build + published release to exercise)
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -813,6 +813,47 @@ autostart surface needs a live pass.
 - 2026-07-15: `03d6e59` → `2a80bda` (v1.6.1: check-now update link, mixer repaint on hotkey nudges, exclusive-fullscreen popup suppression, default mixer bind `shift+f3`, versioned build archive). Everything shipped is §10.
 - 2026-07-16: `f26a9c5` (v1.7 Task 1 start) → `3aa9696` (v1.7 implementation, all 5 tasks: mixer settings, `mixer_key_action`, rolodex/viewport, nav modes + M mute, level pulse) + this docs commit (Task 6: feature doc, README, backlog §11, the `AudioUtilities.GetSpeakers().GetId()` → `.id` bugfix, v1.7.0 pre-stamp). Everything shipped is §11.
 - 2026-07-16 (later): `42c09df` (v1.8 Mic EQ Task 1 start) → `fac43cc` (v1.8 implementation, all 5 tasks: pure renderer/writer core, settings card, guided setup flow, enforced-mic wiring, fallback-targeting fix) + this docs commit (Task 6: feature doc, README, Dynamic-Settings, System-Conventions "Optional extension card" registration, backlog §12, v1.8.0 pre-stamp). Everything shipped is §12. **Commit-sweep watermark advances to this docs commit; next sweep starts from here.**
+
+## 21. Settings dirty-tracking, help tooltips & OSD toggle (v2.0.0, 2026-07-24, ~10 min in the live settings window)
+
+**Shipped:** this change — settings-window unsaved-changes tracking (green
+per-control + per-row highlighting, "● Unsaved changes" footer bar, Cancel/
+revert, 3-way close guard), custom `?` help tooltips on every setting, and a
+new `osd_enabled` toggle to silence the volume/profile OSD.
+**Machine-verified:** `uv run pytest -q` 137/137 (adds `OsdEnabledSettingTests`:
+default, old-config merge, `show_osd` guard early-returns when disabled /
+proceeds when enabled); settings `<script>` `node --check`-clean; stubbed-`pywebview`
+browser harness confirmed the dirty bar toggles, Save/Cancel enable/disable,
+per-control + per-row (changed + added) green, Cancel reverts, tooltip copy
+shows, and the 3-way close modal appears only when dirty. These verify it runs
+and the logic is right — not how it *feels* in the real frameless 442 px window.
+
+1. **Dirty highlight, real window:** open Settings, change a few things —
+   toggle Enforce, drag the volume slider, edit a device row's %, add a
+   fallback, rebind a hotkey. Each changed control/row should turn green
+   (added rows a brighter green), and the footer should show "● Unsaved
+   changes" with Save + Cancel becoming enabled. Does the green read clearly
+   against the dark theme at the real window width without feeling noisy?
+2. **Cancel = revert:** with several unsaved edits, click **Cancel** — the
+   form should snap back to the last-saved state, all green cleared, bar gone,
+   Save/Cancel disabled. Nothing persisted.
+3. **Close guard:** with unsaved edits, click **Close** (and separately the ✕)
+   → the 3-way modal appears. **Save & Close** persists then hides;
+   **Discard & Close** hides without saving; **Keep Editing** returns you to
+   the form. With NO unsaved edits, Close/✕ should hide immediately (no modal).
+4. **Reopen is clean:** after Save (or Discard), reopen Settings from the tray
+   — it should open with no green and the bar hidden (fresh baseline).
+5. **Tooltips:** hover each `?` — the tooltip should appear near the glyph,
+   fully on-screen (not clipped at the window edge; ones near the bottom/right
+   should flip/clamp), styled like the rest of the UI, and read helpfully.
+6. **OSD toggle:** turn **Show volume popup (OSD)** off, Save, then fire a
+   volume hotkey and a profile-switch hotkey — the volume/profile popup should
+   NOT appear, but the volume change / profile switch still happens. Turn it
+   back on → the popup returns. (No restart needed.)
+7. **Profile-switch caveat (known):** while you have unsaved edits, switching
+   the Profile dropdown still discards them silently (pre-existing behavior;
+   the guard covers Close, not the dropdown). Confirm this isn't surprising in
+   practice, or flag it to add the same modal to the profile switch.
 
 ## Changelog (verified items move here)
 
