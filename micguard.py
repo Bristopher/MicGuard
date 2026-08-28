@@ -25,6 +25,7 @@ import velopack
 APP_NAME = "MicGuard"
 VERSION = "2.0.2"
 GITHUB_REPO = "Bristopher/MicGuard"
+GITHUB_URL = f"https://github.com/{GITHUB_REPO}"          # Velopack GithubSource repo
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 EQ_SITE_URL = "https://sourceforge.net/projects/equalizerapo/"
 EQ_DOWNLOAD_URL = "https://sourceforge.net/projects/equalizerapo/files/latest/download"
@@ -40,8 +41,13 @@ RECOMMENDED_VOLUME = 85  # the AT2020 sweet spot — "Use recommended" in settin
 PACK_ID = "com.cbuzi.micguard"
 PACK_TITLE = APP_NAME          # "MicGuard"
 PACK_AUTHORS = "Bristopher"
-# GitHub rewrites releases/latest/download/<asset> to the newest release's asset
-UPDATE_FEED_URL = f"https://github.com/{GITHUB_REPO}/releases/latest/download/"
+# Updates come through Velopack's GithubSource (the GitHub releases API), NOT a
+# raw feed URL: GitHub serves release assets via a redirect to signed
+# release-assets.githubusercontent.com URLs, which Velopack's plain HttpSource
+# can't follow — it 404s (the v2.0.0–2.0.2 "Update check failed (offline?)"
+# bug). GithubSource enumerates releases + assets through the API instead. The
+# repo (GITHUB_URL) is the real immutable update identity; releases must still
+# carry the vpk feed assets (releases.win.json / RELEASES / *.nupkg).
 # Velopack install root: %LOCALAPPDATA%\com.cbuzi.micguard\ (current\ + Update.exe + stub)
 VELOPACK_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), PACK_ID)
@@ -1434,8 +1440,13 @@ def set_run_at_startup(enabled: bool) -> None:
                 pass
 
 
-def update_feed_url() -> str:
-    return UPDATE_FEED_URL
+def update_source() -> "velopack.GithubSource":
+    """The Velopack update source: GitHub releases via the API. Must be a
+    GithubSource, NOT a raw URL string — a URL string becomes an HttpSource
+    (static file host), which can't follow GitHub's redirect to signed asset
+    URLs and fails the update check with HTTP 404. Proven against a real 2.0.1
+    install: URL string → 404, GithubSource → finds the update. (2026-07-24)"""
+    return velopack.GithubSource(GITHUB_URL, None, False)
 
 
 def installed_exe_stub() -> str:
@@ -3205,12 +3216,15 @@ class App:
                 webbrowser.open(RELEASES_URL)
             return "Not an installed build"
         try:
-            mgr = velopack.UpdateManager(update_feed_url())
+            mgr = velopack.UpdateManager(update_source())
             info = mgr.check_for_updates()
         except Exception as e:
             log.info("update check failed: %s", e)
             if not quiet:
-                self._notify("Update check failed (offline?)")
+                # fail open: a manual check that errors opens the releases page
+                # so the user is never stranded (the documented convention)
+                self._notify("Update check failed — opening the releases page")
+                webbrowser.open(RELEASES_URL)
             return "Update check failed (offline?)"
         if not info:
             if not quiet:
@@ -3588,7 +3602,7 @@ class App:
                 if not is_velopack_installed():
                     return {"status": "source", "current": VERSION}
                 try:
-                    mgr = velopack.UpdateManager(update_feed_url())
+                    mgr = velopack.UpdateManager(update_source())
                     info = mgr.check_for_updates()
                 except Exception as e:
                     log.info("update check failed: %s", e)

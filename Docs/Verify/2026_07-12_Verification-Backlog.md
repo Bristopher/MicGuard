@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-24 — §21 added: settings dirty-tracking (green highlight, unsaved-changes bar, Cancel/revert, 3-way close guard), custom `?` help tooltips, and the `osd_enabled` OSD toggle — code shipped + machine-verified (137 pytest, node --check, stubbed-pywebview harness), live-window feel + tooltip placement + OSD suppression owed to human review. Prior: 2026-07-23 — §20 added: v2.0.0 Velopack install/update/uninstall migration (needs a real build + published release to exercise)
+**Updated:** 2026-07-24 — §22 added: in-app update check fixed (Velopack `GithubSource` instead of a feed-URL `HttpSource` that 404'd on GitHub's signed-asset redirect; manual check now fails open to the releases page) — proven against a real 2.0.1 install (URL→404, GithubSource→2.0.2), 138 pytest; already-installed ≤2.0.2 copies need a one-time manual 2.0.3 install. Also §21.8/.9: settings volume-slider `easy_drag` fix + reorder green-highlight/frozen-priority-numbers. Prior: 2026-07-23 — §20 added: v2.0.0 Velopack migration
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -867,6 +867,35 @@ and the logic is right — not how it *feels* in the real frameless 442 px windo
    you shuffle (so a moved "1." can sit below a "2."), then **correct** to
    1,2,3… down the new order the moment you Save. Rows you didn't move stay
    un-highlighted. Cancel should restore both the order and the numbers.
+
+## 22. In-app update check fixed — GithubSource, not a feed URL (v2.0.3, 2026-07-24, needs the NEXT release after 2.0.3 to fully confirm the auto-update path)
+
+**Shipped:** this change — the Velopack update check used a raw feed-URL string
+(`https://…/releases/latest/download/`), which Velopack treats as an
+`HttpSource` (static file host). GitHub serves release assets via a redirect to
+signed `release-assets.githubusercontent.com` URLs that `HttpSource` can't
+follow, so every check failed with **HTTP 404** → "Update check failed
+(offline?)". Switched to `velopack.GithubSource(GITHUB_URL, …)` via the new
+`update_source()`. Also made a manual (non-quiet) check that still errors
+**fail open** by opening the releases page (was only a toast).
+**Machine-verified (definitive):** built a `VelopackLocatorConfig` pointing at
+the REAL installed 2.0.1 app and ran both paths — the URL string threw
+`Http status: 404`, `GithubSource` returned **2.0.2**. `uv run pytest -q` 138/138.
+
+**IMPORTANT — the already-installed 2.0.0/2.0.1/2.0.2 copies cannot auto-update**
+(the broken `HttpSource` check is baked into them). They must download and run
+the **2.0.3 setup once, manually**; from 2.0.3 onward in-app updates work.
+
+1. **Manual install of 2.0.3, then the real auto-update test:** install 2.0.3
+   over your current copy. Then, when a 2.0.4 (or any later) release exists,
+   tray → **Check for updates** on 2.0.3 should now find it, show the consent
+   dialog, download, and relaunch on the new version — no 404.
+2. **Up-to-date path:** on 2.0.3 with no newer release, Check for updates →
+   "Up to date (v2.0.3)" toast (not the 404 error).
+3. **Fail-open:** with the network genuinely down, a manual Check should now
+   open the releases page (not just show a toast). Wording read right?
+4. **Settings row:** Settings → the update card's "Check" should mirror the
+   tray behavior (find/none/error), and "Install & relaunch" should apply.
 
 ## Changelog (verified items move here)
 

@@ -921,10 +921,15 @@ class TestMixerInput(unittest.TestCase):
 
 
 class VelopackHelpersTests(unittest.TestCase):
-    def test_feed_url_points_at_github_latest_download(self):
-        self.assertEqual(
-            m.update_feed_url(),
-            "https://github.com/Bristopher/MicGuard/releases/latest/download/")
+    def test_github_url_is_the_repo(self):
+        self.assertEqual(m.GITHUB_URL, "https://github.com/Bristopher/MicGuard")
+
+    def test_update_source_is_a_github_source(self):
+        # updates MUST use Velopack's GithubSource, not a raw URL string (which
+        # becomes an HttpSource and 404s on GitHub's redirected asset URLs)
+        import velopack
+        src = m.update_source()
+        self.assertIsInstance(src, velopack.GithubSource)
 
     def test_installed_exe_stub_is_packid_root_plus_exe(self):
         import os

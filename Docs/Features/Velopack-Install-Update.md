@@ -47,7 +47,7 @@ main()
 Update check (tray "Check for updates" / Settings row / launch check)
  └─ App._update_check(quiet)
      ├─ not is_velopack_installed()? → fail open: info dialog + open RELEASES_URL
-     ├─ mgr = velopack.UpdateManager(update_feed_url())
+     ├─ mgr = velopack.UpdateManager(update_source())   # GithubSource, NOT a URL string
      ├─ info = mgr.check_for_updates()          ← None means up to date
      ├─ no info? → "Up to date (vX.Y.Z)"
      └─ info? → consent dialog → App._velopack_apply(mgr, info)
@@ -88,7 +88,7 @@ Autostart
 | packId | `com.cbuzi.micguard` | `PACK_ID` |
 | Pack title | `MicGuard` | `PACK_TITLE` (= `APP_NAME`) |
 | Pack authors | `Bristopher` | `PACK_AUTHORS` |
-| Update feed URL | `https://github.com/Bristopher/MicGuard/releases/latest/download/` | `UPDATE_FEED_URL` (derived from `GITHUB_REPO`) — GitHub rewrites `releases/latest/download/<asset>` to the newest release's asset, so the feed URL itself never has to change per-release |
+| Update source (repo) | `https://github.com/Bristopher/MicGuard` | `GITHUB_URL` (derived from `GITHUB_REPO`); `update_source()` wraps it in `velopack.GithubSource`. **Not a raw feed URL** — see the update-flow note below. The v2.0.0–2.0.2 builds used a `releases/latest/download/` URL string (an `HttpSource`) which 404'd on GitHub's signed-asset redirect; v2.0.3 switched to `GithubSource`. |
 | Install root | `%LOCALAPPDATA%\com.cbuzi.micguard\` | `VELOPACK_DIR` |
 | mainExe | `MicGuard.exe` | `vpk pack --mainExe MicGuard.exe`; `installed_exe_stub()` builds `VELOPACK_DIR\MicGuard.exe` |
 | Config dir (unchanged, deliberately outside install root) | `%APPDATA%\MicGuard\` | `CONFIG_DIR` |
@@ -97,9 +97,10 @@ Autostart
 
 ### Implemented
 - ✅ Velopack identity constants (`PACK_ID`, `PACK_TITLE`, `PACK_AUTHORS`,
-  `UPDATE_FEED_URL`, `VELOPACK_DIR`) in `micguard.py`
-- ✅ Pure helpers: `update_feed_url()`, `installed_exe_stub()`,
-  `is_velopack_installed()` — all pytest-covered (`VelopackHelpersTests`)
+  `GITHUB_URL`, `VELOPACK_DIR`) in `micguard.py`
+- ✅ Pure helpers: `update_source()` (returns `velopack.GithubSource`),
+  `installed_exe_stub()`, `is_velopack_installed()` — all pytest-covered
+  (`VelopackHelpersTests`)
 - ✅ `main()` runs `velopack.App().on_restarted(_velopack_on_restarted).run()`
   first, before the single-instance mutex
 - ✅ Old `--updated` relaunch machinery removed (`_process_snapshot`,
@@ -159,10 +160,10 @@ Autostart
 PACK_ID: str                       # "com.cbuzi.micguard" — IMMUTABLE
 PACK_TITLE: str                    # "MicGuard"
 PACK_AUTHORS: str                  # "Bristopher"
-UPDATE_FEED_URL: str               # f"https://github.com/{GITHUB_REPO}/releases/latest/download/"
+GITHUB_URL: str                    # f"https://github.com/{GITHUB_REPO}" — GithubSource repo
 VELOPACK_DIR: str                  # %LOCALAPPDATA%\com.cbuzi.micguard
 
-def update_feed_url() -> str: ...
+def update_source() -> velopack.GithubSource: ...   # NOT a URL string (would 404)
 def installed_exe_stub() -> str: ...      # VELOPACK_DIR\MicGuard.exe
 def is_velopack_installed() -> bool: ...  # sys.executable inside VELOPACK_DIR?
 
@@ -189,7 +190,7 @@ flags are unchanged in meaning; only the mechanism behind "check" and
 **Automated (pytest, `uv run pytest -q` — 133 tests, down from 141
 pre-migration since the old rename-swap-updater tests were removed along with
 the code they covered):** `VelopackHelpersTests` covers the pure helpers
-(`update_feed_url`, `installed_exe_stub`, `is_velopack_installed` across
+(`update_source`, `installed_exe_stub`, `is_velopack_installed` across
 frozen/not-frozen and inside/outside-install-dir cases). `uv run python -c
 "import micguard"` stays clean throughout.
 

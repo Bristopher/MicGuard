@@ -89,7 +89,7 @@ fresh manual install, defeating the entire point of Velopack):
 | Value | Current | Where |
 |---|---|---|
 | **packId** | `com.cbuzi.micguard` | `PACK_ID` in `micguard.py`; `--packId` in `release.ps1`'s `vpk pack` |
-| **Update feed URL** | `https://github.com/Bristopher/MicGuard/releases/latest/download/` | `UPDATE_FEED_URL` in `micguard.py` (derived from `GITHUB_REPO`) |
+| **Update source (repo)** | `https://github.com/Bristopher/MicGuard` (`GITHUB_URL`, derived from `GITHUB_REPO`) | `update_source()` returns `velopack.GithubSource(GITHUB_URL, None, False)`. **Must be a `GithubSource`, not a raw feed-URL string** — a URL string becomes an `HttpSource` (static file host) and 404s on GitHub's redirect to signed asset URLs (the v2.0.0–2.0.2 "Update check failed" bug, fixed in v2.0.3). Releases still carry the vpk feed assets; GithubSource finds them via the API. |
 | **Config dir** | `%APPDATA%\MicGuard` | `CONFIG_DIR` in `micguard.py` — deliberately OUTSIDE the Velopack install dir so it survives updates/reinstalls |
 | **mainExe** | `MicGuard.exe` | `--mainExe MicGuard.exe` in `release.ps1`'s `vpk pack`; `installed_exe_stub()` builds `VELOPACK_DIR\MicGuard.exe` from it |
 
