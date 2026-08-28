@@ -23,7 +23,7 @@ import winreg
 import velopack
 
 APP_NAME = "MicGuard"
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 GITHUB_REPO = "Bristopher/MicGuard"
 GITHUB_URL = f"https://github.com/{GITHUB_REPO}"          # Velopack GithubSource repo
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
