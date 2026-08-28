@@ -1975,10 +1975,21 @@ function useRecommended(){
 // ---- device priority lists (working copy lives here; Save persists it) ----
 function rowHtml(flow, i, d){
   const isOut = flow === 'out';
+  // Priority number is FROZEN at the last-saved order: it shows where this
+  // device ranks in the baseline, not its live position, so reordering
+  // doesn't renumber under you — the numbers only "correct" to 1,2,3… once
+  // you Save (which re-baselines and re-renders). A row not in the baseline
+  // (newly added) has no saved rank yet, so it shows a "+" marker.
+  let numLabel = (i + 1) + '.';
+  if (baseObj){
+    const bl = isOut ? baseObj.outputs : baseObj.mics;
+    const bi = bl.findIndex(x => x.id === d.id);
+    numLabel = bi >= 0 ? (bi + 1) + '.' : '&#43;';
+  }
   return `<div class="devrow" data-flow="${flow}" data-i="${i}">
     <span class="ord"><a onclick="moveDev('${flow}',${i},-1)">&#9650;</a><a
       onclick="moveDev('${flow}',${i},1)">&#9660;</a></span>
-    <span class="dname" title="${esc(d.name)}">${i+1}. ${esc(d.name)}${
+    <span class="dname" title="${esc(d.name)}">${numLabel} ${esc(d.name)}${
       d.connected ? '' : ' <span class="dis">(not connected)</span>'}</span>
     <label class="mini" title="Hold volume &mdash; keep enforcing it, not just set once"><input
       type="checkbox"${d.hold_volume ? ' checked' : ''}
@@ -2324,6 +2335,10 @@ async function save(){
   renderHistory();
   showSaved(r);
   setBaseline();   // the just-saved state is the new clean baseline
+  // re-render the device lists so the FROZEN priority numbers recompute to the
+  // new saved order (1,2,3…) — this is the "correct the numbers on save" step
+  renderList('mic');
+  renderList('out');
   updateDirty();
 }
 
@@ -2359,16 +2374,20 @@ function paintChanges(){
     diffJson(c.active, baseObj.active));
   const eqon = document.getElementById('eqon');
   if (eqon) eqon.classList.toggle('changed', diffJson(c.micEq, baseObj.micEq));
-  // per-row device highlighting: id-keyed (added = new id, changed = vol/hold differ)
+  // per-row device highlighting: id-keyed. added = new id; changed = the row
+  // moved from its saved rank (reorder), OR its volume/hold differ.
   ['mic', 'out'].forEach(flow => {
     const bm = flow === 'out' ? baseObj.outputs : baseObj.mics;
     document.querySelectorAll(`.devrow[data-flow="${flow}"]`).forEach(el => {
-      const d = listOf(flow)[+el.dataset.i];
+      const curIdx = +el.dataset.i;
+      const d = listOf(flow)[curIdx];
       if (!d){ el.classList.remove('changed', 'added'); return; }
-      const base = bm.find(x => x.id === d.id);
-      el.classList.toggle('added', !base);
+      const baseIdx = bm.findIndex(x => x.id === d.id);
+      const base = baseIdx >= 0 ? bm[baseIdx] : null;
+      el.classList.toggle('added', baseIdx < 0);
       el.classList.toggle('changed', !!base &&
-        (base.volume !== d.volume || !!base.hold_volume !== !!d.hold_volume));
+        (baseIdx !== curIdx ||
+         base.volume !== d.volume || !!base.hold_volume !== !!d.hold_volume));
     });
   });
   // per-row hotkey highlighting: positional (added = beyond baseline length)

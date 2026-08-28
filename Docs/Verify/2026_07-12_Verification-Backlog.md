@@ -860,6 +860,13 @@ and the logic is right — not how it *feels* in the real frameless 442 px windo
    `easy_drag=False` on the settings window). The window must STILL be
    draggable by its title-bar/header. Confirm the typed % box and device-row %
    fields still edit too.
+9. **Reorder highlighting + frozen priority numbers (v2.0.2 fix):** use the
+   ▲/▼ arrows to reorder a mic (or output). The rows you moved should now turn
+   **green** (previously a reorder with unchanged volume/hold wasn't flagged),
+   and the leading priority numbers should **freeze** at their saved rank while
+   you shuffle (so a moved "1." can sit below a "2."), then **correct** to
+   1,2,3… down the new order the moment you Save. Rows you didn't move stay
+   un-highlighted. Cancel should restore both the order and the numbers.
 
 ## Changelog (verified items move here)
 
