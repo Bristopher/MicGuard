@@ -23,7 +23,7 @@ import winreg
 import velopack
 
 APP_NAME = "MicGuard"
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 GITHUB_REPO = "Bristopher/MicGuard"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 EQ_SITE_URL = "https://sourceforge.net/projects/equalizerapo/"
