@@ -67,8 +67,8 @@ DEFAULT_CONFIG = {
     "hotkeys": {
         "enabled": False,
         "bindings": [
-            {"keys": "ctrl+up", "target": "system", "step": 2},
-            {"keys": "ctrl+down", "target": "system", "step": -2},
+            {"keys": "ctrl+alt+up", "target": "system", "step": 2},
+            {"keys": "ctrl+alt+down", "target": "system", "step": -2},
             {"keys": "ctrl+shift+up", "target": "app:Discord.exe", "step": 2},
             {"keys": "ctrl+shift+down", "target": "app:Discord.exe", "step": -2},
             # shift+f3, not f2 — Ubisoft's overlay owns shift+f2 (2026-07-15)
@@ -975,6 +975,11 @@ def mixer_hide_delay(cfg: dict) -> float | None:
 # Thread messages App posts to the hotkey loop to register/unregister the
 # mixer's ephemeral keys ON the manager thread (RegisterHotKey is per-thread).
 WM_APP_MIXER_ON, WM_APP_MIXER_OFF = 0x8001, 0x8002
+# suspend/resume the MAIN bindings while the settings window captures a combo:
+# RegisterHotKey grabs a combo system-wide, so an already-bound key (e.g.
+# ctrl+alt+up) fires its action instead of reaching the WebView capture field.
+# The settings capture field posts these to release the grab while it listens.
+WM_APP_HK_SUSPEND, WM_APP_HK_RESUME = 0x8003, 0x8004
 
 # Ephemeral keys held only while the mixer popup is visible — BARE keys
 # (no modifier): ids 100-108 = digits 1-9, 109 = up, 110 = down, 111 = esc,
@@ -1011,6 +1016,10 @@ class HotkeyManager(threading.Thread):
         self.boost = BoostState()
         # ids of currently-registered mixer keys — owned by the manager thread
         self._mixer_ids: list[int] = []
+        # main-binding registrations (id -> binding), owned by the manager
+        # thread; used to suspend/resume them during settings hotkey capture
+        self._actions: dict = {}
+        self._suspended = False
 
     def start_if_enabled(self):
         if self.app.cfg.get("hotkeys", {}).get("enabled"):
@@ -1022,7 +1031,7 @@ class HotkeyManager(threading.Thread):
         u, k = ctypes.windll.user32, ctypes.windll.kernel32
         comtypes.CoInitialize()
         self._tid = k.GetCurrentThreadId()
-        actions = {}
+        actions = self._actions = {}
         try:
             for n, b in enumerate(self.app.cfg["hotkeys"].get("bindings", []), start=1):
                 parsed = parse_hotkey(b.get("keys", ""))
@@ -1047,6 +1056,10 @@ class HotkeyManager(threading.Thread):
                     self._register_mixer_keys(u)
                 elif msg.message == WM_APP_MIXER_OFF:
                     self._unregister_mixer_keys(u)
+                elif msg.message == WM_APP_HK_SUSPEND:
+                    self._suspend_main(u)
+                elif msg.message == WM_APP_HK_RESUME:
+                    self._resume_main(u)
         except Exception as e:
             log.warning("hotkey loop died: %s", e)
         finally:
@@ -1092,6 +1105,38 @@ class HotkeyManager(threading.Thread):
         if self._tid and self.is_alive():
             ctypes.windll.user32.PostThreadMessageW(
                 self._tid, WM_APP_MIXER_ON if on else WM_APP_MIXER_OFF, 0, 0)
+
+    # ---- suspend/resume main bindings (settings hotkey capture) ----
+    # While the settings capture field listens, the main combos must NOT be
+    # grabbed by RegisterHotKey or Windows fires the action instead of letting
+    # the keydown reach the WebView. Register/unregister stay on this thread.
+
+    def _suspend_main(self, u):
+        if self._suspended:
+            return
+        for n in self._actions:
+            try:
+                u.UnregisterHotKey(None, n)
+            except Exception:
+                pass
+        self._suspended = True
+
+    def _resume_main(self, u):
+        if not self._suspended:
+            return
+        self._suspended = False
+        for n, b in self._actions.items():
+            parsed = parse_hotkey(b.get("keys", ""))
+            if parsed:
+                u.RegisterHotKey(None, n, parsed[0], parsed[1])
+
+    def set_suspended(self, on: bool):
+        """Thread-safe: release (on=True) / re-grab (on=False) the main
+        bindings so the settings window can capture a combo. No-op if the loop
+        isn't running."""
+        if self._tid and self.is_alive():
+            ctypes.windll.user32.PostThreadMessageW(
+                self._tid, WM_APP_HK_SUSPEND if on else WM_APP_HK_RESUME, 0, 0)
 
     _MIXER_KEYNAMES = {109: "up", 110: "down", 111: "esc",
                        112: "left", 113: "right", 114: "m",
@@ -2132,7 +2177,8 @@ function hkRowHtml(b, i){
   return `<div class="hkrow">
     <input class="hkkeys${bad ? ' hkbad' : ''}" value="${esc(b.keys)}"
       placeholder="press keys&hellip;"${bad ? ' title="In use by another app &mdash; pick a different combo"' : ''}
-      spellcheck="false" onkeydown="hkCapture(event,${i})">
+      spellcheck="false" onkeydown="hkCapture(event,${i})"
+      onfocus="hkFocus(true)" onblur="hkFocus(false)">
     <div class="select-wrap hksel"><select
       onchange="hkTarget(${i},this.value)">${
       opts.map(o => `<option value="${esc(o)}"${o === b.target ? ' selected' : ''}>${
@@ -2165,6 +2211,12 @@ function renderHk(){
 // an unsupported main key leaves the field unchanged rather than storing junk
 const HK_MAIN_KEYS = new Set(['up', 'down', 'left', 'right', 'space', 'tab',
   'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12']);
+// While a key field is focused, release the app's global hotkeys so the
+// combo reaches this field (RegisterHotKey grabs it system-wide otherwise —
+// pressing e.g. ctrl+alt+up would fire the volume action instead of capturing)
+function hkFocus(on){
+  try { pywebview.api.suspend_hotkeys(on); } catch (e) {}
+}
 function hkCapture(e, i){
   e.preventDefault();
   if (e.key === 'Escape'){ S.hotkeys.bindings[i].keys = ''; e.target.value = ''; updateDirty(); return; }
@@ -3475,6 +3527,16 @@ class App:
                 """JS points the level bar at the first connected mic of its
                 working copy whenever the mic list changes."""
                 app._meter_device_id = device_id or None
+
+            def suspend_hotkeys(self_api, on):
+                """A hotkey capture field posts True on focus / False on blur.
+                While True, the running manager releases the global combos so
+                the keydown reaches the WebView instead of firing the bound
+                action (RegisterHotKey grabs combos system-wide)."""
+                mgr = app.hotkeys
+                if mgr is not None:
+                    mgr.set_suspended(bool(on))
+                return {"ok": True}
 
             def set_monitor(self_api, device_id, on):
                 _co_initialize()

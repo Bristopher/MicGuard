@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-24 — §22 added: in-app update check fixed (Velopack `GithubSource` instead of a feed-URL `HttpSource` that 404'd on GitHub's signed-asset redirect; manual check now fails open to the releases page) — proven against a real 2.0.1 install (URL→404, GithubSource→2.0.2), 138 pytest; already-installed ≤2.0.2 copies need a one-time manual 2.0.3 install. Also §21.8/.9: settings volume-slider `easy_drag` fix + reorder green-highlight/frozen-priority-numbers. Prior: 2026-07-23 — §20 added: v2.0.0 Velopack migration
+**Updated:** 2026-07-24 — §23 added: settings hotkey capture now suspends the live bindings so an already-bound combo can be rebound (was firing the action instead of capturing), + default system-volume combos → `ctrl+alt+up`/`down`; machine-verified with real RegisterHotKey. Prior: §22 added: in-app update check fixed (Velopack `GithubSource` instead of a feed-URL `HttpSource` that 404'd on GitHub's signed-asset redirect; manual check now fails open to the releases page) — proven against a real 2.0.1 install (URL→404, GithubSource→2.0.2), 138 pytest; already-installed ≤2.0.2 copies need a one-time manual 2.0.3 install. Also §21.8/.9: settings volume-slider `easy_drag` fix + reorder green-highlight/frozen-priority-numbers. Prior: 2026-07-23 — §20 added: v2.0.0 Velopack migration
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -896,6 +896,33 @@ the **2.0.3 setup once, manually**; from 2.0.3 onward in-app updates work.
    open the releases page (not just show a toast). Wording read right?
 4. **Settings row:** Settings → the update card's "Check" should mirror the
    tray behavior (find/none/error), and "Install & relaunch" should apply.
+
+## 23. Hotkey capture suspends live bindings + new default combos (v2.0.4, 2026-07-24, ~3 min in Settings → Hotkeys)
+
+**Shipped:** this change — a `RegisterHotKey` combo is grabbed system-wide, so
+trying to rebind a hotkey in Settings to an already-bound combo (e.g. the
+volume keys) fired the action instead of capturing it; the field only lit its
+green focus border and nothing recorded. Now focusing a key field posts
+`suspend_hotkeys(True)` → the manager thread unregisters the main bindings, so
+the keydown reaches the WebView capture field; blur posts `False` → re-grab.
+Also changed the default system-volume combos from `ctrl+up`/`ctrl+down` to
+**`ctrl+alt+up`/`ctrl+alt+down`** (fresh configs only — existing config.json
+keeps its bindings until you rebind them, which now works).
+**Machine-verified (real RegisterHotKey):** a live `HotkeyManager` grabbed
+`ctrl+alt+up`; `set_suspended(True)` released it (a second RegisterHotKey from
+another thread then succeeded); `set_suspended(False)` re-grabbed it. 138 pytest.
+
+1. **The rebind that was broken:** Settings → Hotkeys → click a key field and
+   press a combo that's currently bound (e.g. `ctrl+alt+up`). It should now
+   fill the field with the combo (not nudge your volume), turn the row green
+   (unsaved), and Save should apply it. Try binding to the mixer combo
+   (`shift+f3`) too — it should capture, not open the mixer.
+2. **Escape clears** a field (shows empty), blur restores hotkeys.
+3. **After Save**, the newly-bound combo actually fires globally (test it
+   outside Settings). Rebinding several in one session all capture correctly.
+4. **New default (fresh install / after config reset):** system volume is
+   `ctrl+alt+up` / `ctrl+alt+down`. On your existing install the old
+   `ctrl+up`/`ctrl+down` persist until you rebind — confirm you now *can*.
 
 ## Changelog (verified items move here)
 

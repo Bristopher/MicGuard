@@ -110,7 +110,7 @@ predate this key.
 | `enforce` | `true` | Snap mic + volume back when they change | Enforcer (live) |
 | `notify_fallback` | `true` | Popup when device disconnects → fallback | App (on fallback) |
 | `hotkeys.enabled` | `false` | Whether hotkey bindings are active | Hotkey manager (live) |
-| `hotkeys.bindings` | `[...5 defaults...]` | List of key + target pairs for volume nudges | Hotkey manager (live) |
+| `hotkeys.bindings` | 5 defaults: `ctrl+alt+up`/`ctrl+alt+down` = system ±2 (v2.0.4, was `ctrl+up`/`ctrl+down`), `ctrl+shift+up`/`down` = Discord.exe ±2, `shift+f3` = mixer | List of key + target pairs for volume nudges. Capturing a combo in Settings suspends the live bindings so the field can grab it (see System-Conventions "Capture-suspend rule"). | Hotkey manager (live) |
 | `run_at_startup` | `true` | HKCU Run key entry (no admin, no Task Scheduler) | App (on save) |
 | `check_updates` | `true` | Check GitHub releases on launch | App (on launch) |
 | `mixer_nav` | `"digits"` | How Shift+F3 popup’s keys work: `"digits"` (1-9 pick, ↑↓ volume), `"arrows"` (↑↓ pick, ←→ volume), or `"wasd"` (W/S pick, A/D volume — arrows work too; W/A/S/D only globally grabbed in this mode, popup-open only) | Mixer (live) |
