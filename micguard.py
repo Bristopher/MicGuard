@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,7 @@ import winreg
 import velopack
 
 APP_NAME = "MicGuard"
-VERSION = "2.0.4"
+VERSION = "2.0.5"
 GITHUB_REPO = "Bristopher/MicGuard"
 GITHUB_URL = f"https://github.com/{GITHUB_REPO}"          # Velopack GithubSource repo
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -32,6 +33,8 @@ EQ_DOWNLOAD_URL = "https://sourceforge.net/projects/equalizerapo/files/latest/do
 CONFIG_DIR = os.path.join(os.environ["APPDATA"], APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 LOG_PATH = os.path.join(CONFIG_DIR, "micguard.log")
+LOG_MAX_BYTES = 2 * 1024 * 1024   # micguard.log + .1..3 = 8 MB max
+LOG_BACKUPS = 3
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 WATCHDOG_SECONDS = 15  # safety net; real work is event-driven
 VOLUME_EPSILON = 0.005
@@ -175,21 +178,34 @@ def heal_stale_ids(entries, devices) -> bool:
     one such device exists and its id isn't already claimed by another
     entry (name collisions stay untouched rather than guessing). Mutates
     `entries` in place; returns True when anything changed so the caller
-    can persist and log."""
+    can persist and log.
+
+    Falls back to a match that ignores Windows' "N- " duplicate prefix
+    ("Microphone (2- AT2020USB+)" vs "Microphone (AT2020USB+)"): Windows adds
+    or drops it on re-enumeration, which left the AT2020 entries orphaned
+    until 2026-10-27. A prefix match also adopts the device's current name."""
     ids = {d[0] for d in devices}
     claimed = {e.get("id") for e in entries}
     changed = False
     for e in entries:
         if e.get("id") in ids:
             continue
-        matches = [d for d in devices
-                   if d[1] == e.get("name") and d[0] not in claimed]
+        free = [d for d in devices if d[0] not in claimed]
+        matches = [d for d in free if d[1] == e.get("name")]
+        if not matches:
+            want = _strip_dup_prefix(e.get("name"))
+            matches = [d for d in free if _strip_dup_prefix(d[1]) == want]
         if len(matches) == 1:
             claimed.discard(e.get("id"))
-            e["id"] = matches[0][0]
+            e["id"], e["name"] = matches[0]
             claimed.add(matches[0][0])
             changed = True
     return changed
+
+
+def _strip_dup_prefix(name):
+    """'Microphone (2- AT2020USB+)' -> 'Microphone (AT2020USB+)'."""
+    return re.sub(r"\(\d+- ", "(", name or "")
 
 
 # --------------------------------------------------------------------------
@@ -2819,16 +2835,51 @@ document.addEventListener('wheel', e => {
 FLOWS = (("capture", EDataFlow.eCapture.value),
          ("render", EDataFlow.eRender.value))
 
+# Default-device tug-of-war guard. Another app that keeps setting its own
+# default (seen 2026-07-13: 854k restores in 7 h, ~38/s) turns the event-driven
+# re-assert into a hot loop, and every switch makes each audio app reopen its
+# streams. More than FIGHT_LIMIT restores inside FIGHT_WINDOW_S = a fight:
+# stop re-asserting that flow for FIGHT_BACKOFF_S, alert once, then resume.
+FIGHT_LIMIT = 5
+FIGHT_WINDOW_S = 10.0
+FIGHT_BACKOFF_S = 60.0
+
+
+class FightGuard:
+    """PURE (clock passed in) restore-rate limiter for one flow."""
+
+    def __init__(self, limit=FIGHT_LIMIT, window=FIGHT_WINDOW_S,
+                 backoff=FIGHT_BACKOFF_S):
+        self.limit, self.window, self.backoff = limit, window, backoff
+        self._times = []
+        self._paused_until = 0.0
+
+    def paused(self, now) -> bool:
+        return now < self._paused_until
+
+    def record(self, now) -> bool:
+        """Count one restore at `now`. True = this restore trips the guard:
+        skip it and back off (paused() is True until now + backoff)."""
+        self._times = [t for t in self._times if now - t <= self.window]
+        self._times.append(now)
+        if len(self._times) > self.limit:
+            self._times = []
+            self._paused_until = now + self.backoff
+            return True
+        return False
+
 
 class Enforcer(threading.Thread):
     """Owns all COM objects. Woken by audio events (or a slow watchdog) and
     re-asserts the highest-priority connected device of each flow's list
     (capture = mics, render = outputs) plus its volume."""
 
-    def __init__(self, app, on_fallback=None):
+    def __init__(self, app, on_fallback=None, on_fight=None):
         super().__init__(daemon=True, name="enforcer")
         self.app = app
         self.on_fallback = on_fallback          # called OUTSIDE COM callbacks, on this thread
+        self.on_fight = on_fight                # same thread rules as on_fallback
+        self._fight_guards = {"capture": FightGuard(), "render": FightGuard()}
         self.wake: queue.Queue = queue.Queue()
         # NOT "_stop" — see MicMonitor: shadowing Thread._stop() breaks join()
         self._stop_evt = threading.Event()
@@ -2960,6 +3011,15 @@ class Enforcer(threading.Thread):
         self.enforced[key] = want
         for role in (ERole.eMultimedia, ERole.eCommunications, ERole.eConsole):
             if get_default_endpoint_id(flow, role) != want["id"]:
+                guard, now = self._fight_guards[key], time.monotonic()
+                if guard.paused(now):
+                    break                       # backing off; watchdog resumes after
+                if guard.record(now):
+                    log.warning("%s default keeps being changed by another app — "
+                                "pausing re-assert for %.0fs", key, guard.backoff)
+                    if self.on_fight:
+                        self.on_fight(key, want, guard.backoff)
+                    break
                 log.info("%s default drifted (role %s) — restoring %s",
                          key, role.name, want.get("name"))
                 set_default_endpoint(want["id"])
@@ -3021,7 +3081,8 @@ class App:
                      "hold_volume": False}]
             save_config(self.cfg)
         self.history = HistoryRecorder()
-        self.enforcer = Enforcer(self, on_fallback=self.notify_fallback)
+        self.enforcer = Enforcer(self, on_fallback=self.notify_fallback,
+                                 on_fight=self.notify_fight)
         self.icon = None
         self._settings_win = None
         self._menu_win = None
@@ -4097,33 +4158,52 @@ class App:
                 self._apply_mic_eq(enforced_override=now_entry)
             if not self.cfg.get("notify_fallback"):
                 return
-            rect, try_same = popup_monitor_rect(self.cfg)
-            if rect is None:
-                log.info("fallback alert suppressed: fullscreen popups off / no safe monitor")
-                return
-            if self._alert_win is None:
-                self._make_alert_window()
-            if not self._alert_primed:
-                # Priming normally happens up front via webview.start's func
-                # hook (App.run / _prime_alert_window). This is the defensive
-                # fallback for e.g. a window recreated after being closed.
-                self._prime_alert_window()
-            self._alert_win.evaluate_js(
-                f"setAlert({json.dumps(kind)}, {json.dumps(title)}, {json.dumps(sub)})")
-            mx, my, mw, mh = rect
-            target = self._fse_probe_target() if try_same else None
-            self._show_noactivate(self._alert_win, f"{APP_NAME} Alert",
-                                  mx + mw - ALERT_W - 16,
-                                  my + mh - ALERT_H - 56)
-            if target:
-                self._arm_fse_probe(*target, self._hide_alert)
-            if self._alert_timer:
-                self._alert_timer.cancel()
-            self._alert_timer = threading.Timer(8.0, self._hide_alert)
-            self._alert_timer.daemon = True
-            self._alert_timer.start()
+            self._popup_alert(kind, title, sub)
         except Exception as e:
             log.warning("fallback alert failed: %s", e)
+
+    def notify_fight(self, flow_label, want, backoff_s):
+        """Called from the Enforcer thread when another app keeps changing a
+        flow's default (FightGuard tripped). Never raises."""
+        try:
+            kind_name = "Mic" if flow_label == "capture" else "Output"
+            title = f"{kind_name} default keeps changing"
+            sub = (f"Another app keeps switching it away from "
+                   f"{want.get('name') or want.get('id')} — "
+                   f"pausing for {backoff_s:.0f}s")
+            self.history.add("fight", f"{title} — {sub}")
+            if self.cfg.get("notify_fallback"):
+                self._popup_alert("warn", title, sub)
+        except Exception as e:
+            log.warning("fight alert failed: %s", e)
+
+    def _popup_alert(self, kind, title, sub):
+        """Show the no-activate corner alert. Caller catches exceptions."""
+        rect, try_same = popup_monitor_rect(self.cfg)
+        if rect is None:
+            log.info("alert suppressed: fullscreen popups off / no safe monitor")
+            return
+        if self._alert_win is None:
+            self._make_alert_window()
+        if not self._alert_primed:
+            # Priming normally happens up front via webview.start's func
+            # hook (App.run / _prime_alert_window). This is the defensive
+            # fallback for e.g. a window recreated after being closed.
+            self._prime_alert_window()
+        self._alert_win.evaluate_js(
+            f"setAlert({json.dumps(kind)}, {json.dumps(title)}, {json.dumps(sub)})")
+        mx, my, mw, mh = rect
+        target = self._fse_probe_target() if try_same else None
+        self._show_noactivate(self._alert_win, f"{APP_NAME} Alert",
+                              mx + mw - ALERT_W - 16,
+                              my + mh - ALERT_H - 56)
+        if target:
+            self._arm_fse_probe(*target, self._hide_alert)
+        if self._alert_timer:
+            self._alert_timer.cancel()
+        self._alert_timer = threading.Timer(8.0, self._hide_alert)
+        self._alert_timer.daemon = True
+        self._alert_timer.start()
 
     # ---- volume-hotkey OSD (no-focus, like the alert) ----
 
@@ -4778,8 +4858,11 @@ def main():
         # never let Velopack bootstrap crash a source/dev run
         logging.getLogger(APP_NAME).warning("velopack app run failed: %s", e)
     os.makedirs(CONFIG_DIR, exist_ok=True)
+    # rotate: an unrotated log grew to 68 MB from one default-device fight
+    from logging.handlers import RotatingFileHandler
     logging.basicConfig(
-        filename=LOG_PATH,
+        handlers=[RotatingFileHandler(LOG_PATH, maxBytes=LOG_MAX_BYTES,
+                                      backupCount=LOG_BACKUPS, encoding="utf-8")],
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )

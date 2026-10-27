@@ -2,7 +2,7 @@
 
 **Status:** 🔴 LIVING DOC — update whenever a feature ships or an item gets verified
 **Created:** 2026-07-12
-**Updated:** 2026-07-24 — §23 added: settings hotkey capture now suspends the live bindings so an already-bound combo can be rebound (was firing the action instead of capturing), + default system-volume combos → `ctrl+alt+up`/`down`; machine-verified with real RegisterHotKey. Prior: §22 added: in-app update check fixed (Velopack `GithubSource` instead of a feed-URL `HttpSource` that 404'd on GitHub's signed-asset redirect; manual check now fails open to the releases page) — proven against a real 2.0.1 install (URL→404, GithubSource→2.0.2), 138 pytest; already-installed ≤2.0.2 copies need a one-time manual 2.0.3 install. Also §21.8/.9: settings volume-slider `easy_drag` fix + reorder green-highlight/frozen-priority-numbers. Prior: 2026-07-23 — §20 added: v2.0.0 Velopack migration
+**Updated:** 2026-10-27 — §24 added: v2.0.5 default-device fight guard (backs off 60 s after 5 restores in 10 s), rotating log (2 MB x 3), "N- " prefix self-heal; machine-verified on the installed frozen build, 146 pytest. Prior: 2026-07-24 — §23 added: settings hotkey capture now suspends the live bindings so an already-bound combo can be rebound (was firing the action instead of capturing), + default system-volume combos → `ctrl+alt+up`/`down`; machine-verified with real RegisterHotKey. Prior: §22 added: in-app update check fixed (Velopack `GithubSource` instead of a feed-URL `HttpSource` that 404'd on GitHub's signed-asset redirect; manual check now fails open to the releases page) — proven against a real 2.0.1 install (URL→404, GithubSource→2.0.2), 138 pytest; already-installed ≤2.0.2 copies need a one-time manual 2.0.3 install. Also §21.8/.9: settings volume-slider `easy_drag` fix + reorder green-highlight/frozen-priority-numbers. Prior: 2026-07-23 — §20 added: v2.0.0 Velopack migration
 **Commit-sweep watermark:** `4bda0ee` (2026-07-12, root commit) → `42c09df..fac43cc` (2026-07-16, v1.8 Mic EQ implementation) + this docs commit, all commits reviewed through **2026-07-16** — everything shipped is in §1–§12 below. **Next sweep starts from this docs commit.**
 **Rule:** automated checks (the sabotage test, log-file smoke, release-API probe) verify that things run and don't error. They cannot judge whether a feature *feels right* on a real gaming session, on a friend's PC, or across a reboot. That's what this list is.
 **Rule 2 (standing):** this doc is updated *as we go* — every shipped feature adds its manual-verify items here **in the same change** (with its commit range and ship date), and each commit-range sweep advances the watermark above with the sweep date.
@@ -923,6 +923,32 @@ another thread then succeeded); `set_suspended(False)` re-grabbed it. 138 pytest
 4. **New default (fresh install / after config reset):** system volume is
    `ctrl+alt+up` / `ctrl+alt+down`. On your existing install the old
    `ctrl+up`/`ctrl+down` persist until you rebind — confirm you now *can*.
+
+## 24. Default-device fight guard, log rotation, "2- " prefix self-heal (v2.0.5, 2026-10-27, ~3 min)
+
+**Shipped:** this change. (1) `FightGuard`: more than 5 default-device restores
+in 10 s for one flow = another app is fighting MicGuard; it stops re-asserting
+that flow for 60 s, logs one warning, adds a `fight` history row and shows the
+corner alert ("Output default keeps changing"), then the watchdog resumes. The
+2026-07-13 log held 854k restores in 7 h from such a fight. (2) The log is now a
+`RotatingFileHandler` (2 MB x 3 backups, UTF-8, so the em dashes stop showing
+as `?`); the old 68 MB log rolled to `micguard.log.1` on first start.
+(3) `heal_stale_ids` falls back to a match that ignores Windows' "N- " duplicate
+prefix: the AT2020 entries were saved as "Microphone (2- AT2020USB+)" and
+Windows now calls it "Microphone (AT2020USB+)", so nothing was enforced on the
+desktop until this fix.
+**Machine-verified (installed frozen v2.0.5 via Velopack Setup):** both flows
+re-adopted on start; a script forcing the default output every 0.2 s got 5
+restores, then the guard tripped, MicGuard stayed off for 60 s and reclaimed
+the default at +61 s; volume sabotage restored 47% -> 85%. 146 pytest.
+
+1. **The alert:** during a fight the corner alert reads "Output default keeps
+   changing" with the device name and "pausing for 60s"; it looks like the
+   other alerts and auto-hides.
+2. **History card:** Settings → History shows the "Output default keeps
+   changing" row.
+3. **Normal use:** plug/unplug the AT2020 a few times; the default still
+   comes back each time and no fight alert appears for ordinary replugs.
 
 ## Changelog (verified items move here)
 

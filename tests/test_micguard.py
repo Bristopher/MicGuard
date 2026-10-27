@@ -798,6 +798,32 @@ class TestHealStaleIds(unittest.TestCase):
         self.assertEqual(entries[0]["id"], "new-id")   # first priority wins
         self.assertEqual(entries[1]["id"], "stale2")   # second stays stale
 
+    def test_dropped_dup_prefix_heals_and_adopts_name(self):
+        # Windows dropped "2- " on re-enumeration (the 2026-10-27 AT2020 case)
+        devices = [("new-id", "Microphone (AT2020USB+)")]
+        entries = [{"id": "stale", "name": "Microphone (2- AT2020USB+)", "volume": 85}]
+        self.assertTrue(m.heal_stale_ids(entries, devices))
+        self.assertEqual(entries[0]["id"], "new-id")
+        self.assertEqual(entries[0]["name"], "Microphone (AT2020USB+)")
+
+    def test_added_dup_prefix_heals(self):
+        devices = [("new-id", "Headphones (3- AT2020USB+)")]
+        entries = [{"id": "stale", "name": "Headphones (AT2020USB+)", "volume": 42}]
+        self.assertTrue(m.heal_stale_ids(entries, devices))
+        self.assertEqual(entries[0]["id"], "new-id")
+
+    def test_exact_match_beats_prefix_match(self):
+        devices = [("p", "Mic (2- X)"), ("e", "Mic (X)")]
+        entries = [{"id": "stale", "name": "Mic (X)", "volume": 85}]
+        self.assertTrue(m.heal_stale_ids(entries, devices))
+        self.assertEqual(entries[0]["id"], "e")
+
+    def test_ambiguous_prefix_match_untouched(self):
+        devices = [("a", "Mic (2- X)"), ("b", "Mic (3- X)")]
+        entries = [{"id": "stale", "name": "Mic (X)", "volume": 85}]
+        self.assertFalse(m.heal_stale_ids(entries, devices))
+        self.assertEqual(entries[0]["id"], "stale")
+
 
 class TestMixerKeyActionWasd(unittest.TestCase):
     def test_wasd_mode_full_map(self):
@@ -968,3 +994,33 @@ class OsdEnabledSettingTests(unittest.TestCase):
         import types
         stub = types.SimpleNamespace(cfg={"osd_enabled": True})
         self.assertIsNone(m.App.show_osd(stub, "Vol", 50))
+
+
+class TestFightGuard(unittest.TestCase):
+    def test_restores_within_limit_pass(self):
+        g = m.FightGuard(limit=5, window=10.0, backoff=60.0)
+        self.assertFalse(any(g.record(100.0 + i) for i in range(5)))
+        self.assertFalse(g.paused(105.0))
+
+    def test_restore_over_limit_trips_and_pauses(self):
+        g = m.FightGuard(limit=5, window=10.0, backoff=60.0)
+        for i in range(5):
+            g.record(100.0 + i * 0.1)
+        self.assertTrue(g.record(100.6))
+        self.assertTrue(g.paused(100.6))
+        self.assertTrue(g.paused(160.5))
+        self.assertFalse(g.paused(160.7))
+
+    def test_slow_drift_never_trips(self):
+        # one restore every 3 s: never more than 4 inside a 10 s window
+        g = m.FightGuard(limit=5, window=10.0, backoff=60.0)
+        self.assertFalse(any(g.record(i * 3.0) for i in range(100)))
+
+    def test_counter_resets_after_trip(self):
+        g = m.FightGuard(limit=2, window=10.0, backoff=5.0)
+        g.record(0.0); g.record(0.1)
+        self.assertTrue(g.record(0.2))
+        # after the backoff a fresh burst gets the full allowance again
+        self.assertFalse(g.record(6.0))
+        self.assertFalse(g.record(6.1))
+        self.assertTrue(g.record(6.2))
