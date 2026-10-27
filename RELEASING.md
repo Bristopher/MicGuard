@@ -8,17 +8,27 @@ decided **at build time** by `release.ps1` — it looks at the latest released
 `pyproject.toml`. You never edit a version number by hand.
 
 Testing a build locally WITHOUT releasing is a different script:
-`.\install-test.ps1` (build → install over `%LOCALAPPDATA%\Programs\MicGuard`
-→ relaunch → smoke). No version, no tag, no GitHub.
+`.\install-test.ps1` (onedir build → `vpk pack` at the current VERSION into
+`Releases\local-test\` → silent Velopack Setup over
+`%LOCALAPPDATA%\com.cbuzi.micguard`, the copy the Run key autostarts →
+relaunch → smoke). No version bump, no tag, no GitHub.
 
 There is also a howler-style interactive driver, `.\build-release-FULL_Build.ps1`:
-version-stamp → build → archive to `Releases\vX.Y.Z\` → optional local
-install/relaunch → then a publish menu: **[1]** release now (it just calls
+version-stamp → build + `vpk pack` into `Releases\vX.Y.Z\` → optional local
+Setup install/relaunch → then a publish menu: **[1]** release now (it just calls
 `release.ps1` — still the single release path), **[2]** (default) emit a
 ready-to-paste **Claude prompt** (saved next to the archived build + copied to
 the clipboard) that has Claude draft the release notes from the git log since
 the last tag and run `release.ps1 -Notes` itself, or **[3]** build only.
 Flags: `-Version x.y.z`, `-Install`/`-NoInstall`, `-PromptOnly`.
+
+All three scripts dot-source `build-common.ps1` for the shared steps (onedir
+build, `vpk pack`, local Setup install, publish). Publishing creates a
+**draft** release, uploads each asset with retries and `--clobber`, checks
+every remote size against the local file, and only then publishes it as
+Latest. A one-shot `gh release create <assets>` died mid-upload on v2.0.5
+("ReleaseAsset.name already exists") and gh deleted the whole release; if an
+upload still fails, the draft stays in place for a re-run.
 
 ## Prerequisites
 

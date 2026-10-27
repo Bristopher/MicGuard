@@ -27,8 +27,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-
-$GithubRepo = 'Bristopher/MicGuard'
+. "$PSScriptRoot\build-common.ps1"   # $GithubRepo, build/pack/publish helpers
 
 if (git status --porcelain) {
     throw 'Working tree is not clean - commit or stash your changes first.'
@@ -100,77 +99,15 @@ Write-Host "Releasing v$new" -ForegroundColor Green
     Set-Content pyproject.toml -NoNewline
 Write-Host "  Stamped micguard.py + pyproject.toml -> $new"
 
-# ── Ensure vpk (Velopack CLI) is available ────────────────────────────────────
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-    throw "dotnet SDK not found - install .NET (required for the vpk CLI) before running this script."
-}
-if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
-    Write-Host "vpk CLI not found - installing via 'dotnet tool install -g vpk'..." -ForegroundColor Yellow
-    dotnet tool install -g vpk
-    if ($LASTEXITCODE -ne 0) { throw "dotnet tool install -g vpk failed" }
-    $dotnetToolsDir = Join-Path $env:USERPROFILE ".dotnet\tools"
-    if ($env:Path -notlike "*$dotnetToolsDir*") { $env:Path = "$dotnetToolsDir;$env:Path" }
-    if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
-        throw "vpk still not found on PATH after install - open a new shell to pick up the PATH change and re-run."
-    }
-}
-
-# ── Step 1: Build the onedir PyInstaller bundle ───────────────────────────────
+# ── Steps 1-3: onedir build, Velopack pack (with delta), rename exes ─────────
+# (shared with install-test.ps1 / build-release-FULL_Build.ps1: build-common.ps1)
 Write-Host ""
 Write-Host "Step 1 - Building with PyInstaller (onedir)..." -ForegroundColor Yellow
-# Wipe any prior dist/build first: without --noconfirm PyInstaller's COLLECT
-# step ABORTS on a non-empty dist\MicGuard, and because a stale MicGuard.exe
-# still satisfies the Test-Path check below, a failed rebuild would silently
-# ship the OLD onedir (this bit us on the first v2.0.0 pack). --noconfirm makes
-# COLLECT overwrite; the explicit clean + exit-code check are belt-and-braces.
-if (Test-Path dist)  { Remove-Item dist  -Recurse -Force }
-if (Test-Path build) { Remove-Item build -Recurse -Force }
-uv run pyinstaller --noconfirm --onedir --noconsole --name MicGuard `
-    --icon assets\icon.ico --collect-all webview micguard.py
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed (exit $LASTEXITCODE)" }
-if (-not (Test-Path dist\MicGuard\MicGuard.exe)) { throw 'Build failed - no dist\MicGuard\MicGuard.exe' }
-
-# ── Step 2: Package with Velopack (vpk) ───────────────────────────────────────
+Build-MicGuardOnedir
 Write-Host ""
 Write-Host "Step 2 - Packaging with Velopack..." -ForegroundColor Yellow
-
 $outDir = Join-Path $PSScriptRoot "Releases\v$new"
-if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
-New-Item -ItemType Directory -Force $outDir | Out-Null
-
-# Download the previously published release from GitHub first so vpk can
-# generate a DELTA package (small download for updaters). Only attempted when
-# a release actually exists - the first v2 build has no prior Velopack
-# release, so this must not fail the build.
-gh release view --repo $GithubRepo *> $null
-if ($LASTEXITCODE -eq 0) {
-    vpk download github --repoUrl "https://github.com/$GithubRepo" --outputDir $outDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  (delta download failed - building full package only)" -ForegroundColor DarkGray
-    }
-} else {
-    Write-Host "  (no prior GitHub release - skipping delta download, building full package)" -ForegroundColor DarkGray
-}
-
-vpk pack --packId com.cbuzi.micguard --packTitle "MicGuard" --packAuthors "Bristopher" `
-    --packVersion $new --packDir dist\MicGuard --mainExe MicGuard.exe `
-    --icon assets\icon.ico --outputDir $outDir
-if ($LASTEXITCODE -ne 0) { throw "vpk pack failed" }
-
-# ── Step 3: Rename the user-facing exes (Gkey convention) ────────────────────
-# The feed files (releases.win.json, RELEASES, assets.win.json, *.nupkg) keep
-# their exact vpk-generated names - the in-app updater fetches them by fixed
-# name. Only the Setup/Portable exes, meant for humans, get renamed.
-$setupSrc = Join-Path $outDir "com.cbuzi.micguard-win-Setup.exe"
-$setupDst = Join-Path $outDir "MicGuard_${new}_x64-setup.exe"
-if (Test-Path $setupSrc) { Rename-Item $setupSrc $setupDst -Force }
-
-# vpk emits the portable bundle as a .zip for an onedir app (it's a zipped
-# folder, not a single exe) - verified from a real `vpk pack` smoke build.
-$portableSrc = Join-Path $outDir "com.cbuzi.micguard-win-Portable.zip"
-$portableDst = Join-Path $outDir "MicGuard_${new}_x64-Portable.zip"
-if (Test-Path $portableSrc) { Rename-Item $portableSrc $portableDst -Force }
-
+$null = New-MicGuardPackage -Version $new -OutDir $outDir -WithDelta
 Write-Host "  Packaged -> $outDir"
 
 # ── Step 4: Commit, tag, push ─────────────────────────────────────────────────
@@ -196,14 +133,7 @@ if (-not $Notes) {
         "resume working normally."
 }
 
-$assets = Get-ChildItem $outDir -File | Where-Object {
-    $_.Name -in @("releases.win.json", "RELEASES", "assets.win.json") -or
-    $_.Name -like "*.nupkg" -or
-    $_.Name -like "MicGuard_*"
-} | ForEach-Object { $_.FullName }
-
-gh release create "v$new" @assets --repo $GithubRepo --title "MicGuard v$new" --notes $Notes
-if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+Publish-MicGuardRelease -Version $new -OutDir $outDir -Notes $Notes
 
 Write-Host ""
 Write-Host "Done: v$new published. Running apps will offer the update on next launch." -ForegroundColor Green

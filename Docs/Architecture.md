@@ -64,8 +64,9 @@ full.
 ├── micguard.py          # THE app — all source lives here on purpose
 ├── tests/test_micguard.py  # pytest suite for the pure logic (uv run pytest -q)
 ├── pyproject.toml       # uv project; version is MIRRORED here by release.ps1
-├── release.ps1          # one-command release: bump → build onedir → vpk pack → tag → gh release
-├── install-test.ps1     # TEST-BUILD path: build → install over %LOCALAPPDATA% → smoke
+├── release.ps1          # one-command release: bump → build onedir → vpk pack → tag → draft → upload → verify → publish
+├── install-test.ps1     # TEST-BUILD path: build → vpk pack → Velopack Setup over the autostart copy → smoke
+├── build-common.ps1     # shared build/pack/install/publish helpers (dot-sourced by the scripts above)
 ├── RELEASING.md         # how to ship a version (root, next to the script)
 ├── README.md            # user-facing install/what-it-does
 ├── assets/              # icon + the README settings screenshot
@@ -305,8 +306,9 @@ consent-first; nothing is installed silently. Full detail:
   Add/remove a line and you corrupt the call. Never call the placeholders.
 - **Callbacks must not do COM work or block** — they arrive on COM's threads;
   re-entering the audio API there can deadlock. Queue-poke only.
-- **PyInstaller onefile shows two `MicGuard.exe` processes** (bootstrap +
-  child). Not a bug; `Stop-Process -Name MicGuard` kills both.
+- **The Velopack stub and the real app share the name `MicGuard.exe`**
+  (`%LOCALAPPDATA%\com.cbuzi.micguard\MicGuard.exe` starts
+  `current\MicGuard.exe`). `Stop-Process -Name MicGuard` stops whichever runs.
 - **tkinter-family UIs are banned here by history, not taste alone**: ttk and
   CustomTkinter designs were both user-rejected, and CTk had a real
   thread-race bug (unmapping a window from a background thread before its

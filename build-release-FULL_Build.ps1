@@ -4,10 +4,10 @@
 #   1. Picks the version AT BUILD TIME (suggests next from the latest git tag;
 #      honors a pre-stamped VERSION in micguard.py) and stamps micguard.py +
 #      pyproject.toml.
-#   2. Builds the onefile MicGuard.exe via PyInstaller and archives a versioned
-#      copy under Releases\vX.Y.Z\ (git-ignored).
-#   3. Optionally installs it over %LOCALAPPDATA%\Programs\MicGuard and
-#      relaunches, for hands-on testing.
+#   2. Builds the onedir bundle and packs it with Velopack into
+#      Releases\vX.Y.Z\ (git-ignored): Setup, Portable zip, update feed.
+#   3. Optionally runs that Setup over the installed copy at
+#      %LOCALAPPDATA%\com.cbuzi.micguard (the autostart one) and relaunches.
 #   4. Optionally publishes to GitHub — EITHER directly through release.ps1
 #      (still THE single release path: commit, tag, gh release), OR by spitting
 #      out a ready-to-paste Claude prompt (also copied to the clipboard and
@@ -32,6 +32,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+. "$PSScriptRoot\build-common.ps1"
 
 # ── Detect the latest RELEASED version from git tags ─────────────────────────
 $latestTag = git tag --list 'v*' |
@@ -86,36 +87,19 @@ Write-Host "Building MicGuard v$new..." -ForegroundColor Cyan
     Set-Content pyproject.toml -NoNewline
 Write-Host "  Stamped micguard.py + pyproject.toml -> $new"
 
-# ── Build ────────────────────────────────────────────────────────────────────
-uv run pyinstaller --onefile --noconsole --name MicGuard `
-    --icon assets\icon.ico --collect-all webview micguard.py
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path dist\MicGuard.exe)) {
-    throw 'Build failed - no dist\MicGuard.exe'
-}
-$sizeMB = [math]::Round((Get-Item dist\MicGuard.exe).Length / 1MB, 1)
-Write-Host "  Built dist\MicGuard.exe ($sizeMB MB)" -ForegroundColor Green
-
-# ── Archive a versioned copy (Releases\vX.Y.Z\, git-ignored) ─────────────────
+# ── Build + Velopack pack into Releases\vX.Y.Z\ (git-ignored) ────────────────
+Build-MicGuardOnedir
 $archiveDir = Join-Path $PSScriptRoot "Releases\v$new"
-New-Item -ItemType Directory -Force $archiveDir | Out-Null
-Copy-Item dist\MicGuard.exe (Join-Path $archiveDir "MicGuard-$new.exe") -Force
-Write-Host "  Archived -> Releases\v$new\MicGuard-$new.exe"
+$setup = New-MicGuardPackage -Version $new -OutDir $archiveDir
+Write-Host "  Packed -> Releases\v$new\ ($(Split-Path $setup -Leaf))" -ForegroundColor Green
 
-# ── Optional: install locally + relaunch ─────────────────────────────────────
+# ── Optional: install locally (Velopack Setup) + relaunch ────────────────────
 $doInstall = $Install
 if (-not $Install -and -not $NoInstall) {
-    $ans = Read-Host 'Install over %LOCALAPPDATA%\Programs\MicGuard and relaunch for testing? [y/N]'
+    $ans = Read-Host "Install over $VelopackDir and relaunch for testing? [y/N]"
     $doInstall = $ans.Trim().ToLower() -eq 'y'
 }
-if ($doInstall) {
-    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\MicGuard'
-    New-Item -ItemType Directory -Force $installDir | Out-Null
-    Get-Process MicGuard -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep 1
-    Copy-Item dist\MicGuard.exe (Join-Path $installDir 'MicGuard.exe') -Force
-    Start-Process (Join-Path $installDir 'MicGuard.exe')
-    Write-Host "  Installed + relaunched from $installDir" -ForegroundColor Green
-}
+if ($doInstall) { Install-MicGuardLocal -SetupPath $setup }
 
 # ── Publish choice ───────────────────────────────────────────────────────────
 $logRange = if ($released) { "v$released..HEAD" } else { '' }
@@ -150,8 +134,8 @@ switch ($choice) {
         $prompt = @"
 Release MicGuard v$new to GitHub.
 
-The exe is already built and version-stamped (micguard.py + pyproject.toml at
-$new). Commits since the last release ($releasedLine):
+A local build is packed in Releases\v$new and version-stamped (micguard.py +
+pyproject.toml at $new). Commits since the last release ($releasedLine):
 
 $commitLog
 
@@ -162,9 +146,9 @@ Do this:
 2. Commit any outstanding changes first if the tree is dirty (release.ps1
    refuses a dirty tree).
 3. Publish with:  .\release.ps1 -Version $new -Notes "<the notes>"
-   (it rebuilds, commits the stamp if needed, tags v$new, and uploads the
-   asset named exactly MicGuard.exe — never rename it, the in-app updater
-   depends on that name).
+   (it rebuilds, packs with Velopack incl. a delta, commits the stamp if
+   needed, tags v$new, uploads every asset to a draft, checks sizes, then
+   publishes; never rename the vpk feed files, the in-app updater needs them).
 4. Confirm the release page looks right and report the URL.
 "@
         $promptPath = Join-Path $archiveDir "claude-release-prompt-v$new.txt"
